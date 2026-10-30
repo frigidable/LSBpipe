@@ -13,7 +13,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QLineEdit,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QInputDialog,
     QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QHeaderView, QDockWidget, QScrollArea, QSizePolicy)
@@ -25,6 +25,8 @@ from lsbpipe.surveys.legacy import (
 from lsbpipe.surveys.transfer import probe_product, download_manifest
 from lsbpipe.surveys.viewer import viewer_url
 from lsbpipe.surveys.selection import matching_product, summarize_selection
+from lsbpipe.gui.target_input import (
+    parse_ra_deg, parse_dec_deg, parse_width_arcmin, parse_coordinate_pair)
 
 
 class _DiagnosticWebPage(QWebEnginePage):
@@ -59,6 +61,55 @@ class TaskWorker(QObject):
             self.finished.emit()
 
 
+class TargetTextField(QLineEdit):
+    """Ordinary pasteable text field with strict read-time parsing.
+
+    Unlike QDoubleSpinBox it has no spin buttons, locale-dependent input
+    filtering, or silently clamped values. Invalid drafts remain editable.
+    """
+
+    def __init__(self, initial: float, parser, *, decimals: int = 6, parent=None):
+        super().__init__(parent)
+        self._parser = parser
+        self._decimals = decimals
+        self.setProperty("targetInput", True)
+        self.setClearButtonEnabled(True)
+        self.setMinimumHeight(35)
+        self.setValue(initial)
+        self.editingFinished.connect(self._validate_quietly)
+        self.textEdited.connect(self._clear_invalid)
+
+    def value(self) -> float:
+        return self._parser(self.text())
+
+    def setValue(self, value: float):
+        self.setText(f"{float(value):.{self._decimals}f}".rstrip("0").rstrip("."))
+        self._clear_invalid()
+
+    def _mark_invalid(self, reason: str):
+        self.setProperty("invalid", True)
+        self.setToolTip(reason)
+        self._refresh_style()
+
+    def _clear_invalid(self, *_):
+        if self.property("invalid"):
+            self.setProperty("invalid", False)
+            self._refresh_style()
+
+    def _refresh_style(self):
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def _validate_quietly(self):
+        try:
+            self.value()
+        except ValueError as exc:
+            self._mark_invalid(str(exc))
+        else:
+            self._clear_invalid()
+
+
 class SurveyExplorer(QMainWindow):
     """Initial desktop flow: ICRS target -> release bricks -> file plan -> download."""
 
@@ -79,6 +130,12 @@ class SurveyExplorer(QMainWindow):
             "QPushButton, QComboBox, QDoubleSpinBox { min-height: 27px; } "
             "QPushButton { padding-left: 6px; padding-right: 6px; } "
             "QTableWidget { font-size: 12px; }"
+            "QLineEdit[targetInput=\"true\"] { "
+            "min-height: 33px; padding: 1px 9px; border-radius: 6px; "
+            "border: 1px solid palette(mid); font-size: 13px; }"
+            "QLineEdit[targetInput=\"true\"]:focus { "
+            "border: 2px solid palette(highlight); padding-left: 8px; }"
+            "QLineEdit[invalid=\"true\"] { border: 2px solid #d56b69; }"
         )
         split = QSplitter(Qt.Horizontal, self)
         left = QWidget()
@@ -88,28 +145,52 @@ class SurveyExplorer(QMainWindow):
         panel.setContentsMargins(10, 10, 10, 10)
         panel.setSpacing(8)
 
-        target_box = QGroupBox("Target and search")
-        form = QFormLayout(target_box)
-        self.ra = QDoubleSpinBox()
-        self.ra.setDecimals(6)
-        self.ra.setRange(0, 359.999999)
-        self.ra.setValue(154.7709)
-        self.dec = QDoubleSpinBox()
-        self.dec.setDecimals(6)
-        self.dec.setRange(-90, 90)
-        self.dec.setValue(46.4537)
-        self.field_width = QDoubleSpinBox()
-        self.field_width.setRange(0.1, 120.0)
-        self.field_width.setDecimals(1)
-        self.field_width.setValue(15.0)
-        self.field_width.setSuffix(" arcmin")
-        form.addRow("RA (ICRS, deg)", self.ra)
-        form.addRow("Dec (ICRS, deg)", self.dec)
-        form.addRow("Square field width", self.field_width)
-        # On narrow screens a QFormLayout label steals enough width to
-        # truncate the DR9/DR10/DR11 checkbox captions. Give this control
-        # one full-width row instead, retaining actual descriptive labels.
-        form.addRow(QLabel("Releases"))
+        target_box = QGroupBox("Target · ICRS")
+        target_form = QVBoxLayout(target_box)
+        target_form.setContentsMargins(10, 12, 10, 10)
+        target_form.setSpacing(5)
+
+        self.ra = TargetTextField(154.7709, parse_ra_deg, decimals=6)
+        self.ra.setObjectName("target_ra_input")
+        self.ra.setAccessibleName("Right ascension ICRS")
+        self.ra.setPlaceholderText("154.7709 or 10:19:05")
+        self.ra.setToolTip("Paste ICRS RA in decimal degrees, or hh:mm:ss")
+        self.dec = TargetTextField(46.4537, parse_dec_deg, decimals=6)
+        self.dec.setObjectName("target_dec_input")
+        self.dec.setAccessibleName("Declination ICRS")
+        self.dec.setPlaceholderText("+46.4537 or +46:27:13")
+        self.dec.setToolTip("Paste ICRS Dec in decimal degrees, or ±dd:mm:ss")
+        self.field_width = TargetTextField(15.0, parse_width_arcmin, decimals=2)
+        self.field_width.setObjectName("target_field_width_input")
+        self.field_width.setAccessibleName("Square field width, arcminutes")
+        self.field_width.setPlaceholderText("15  ·  0.25 deg  ·  900 arcsec")
+        self.field_width.setToolTip(
+            "Full square field width. Default units: arcmin. "
+            "Also accepts 0.25 deg or 900 arcsec.")
+
+        for label, field in (
+            ("RA · degrees / hh:mm:ss", self.ra),
+            ("Dec · degrees / ±dd:mm:ss", self.dec),
+            ("Square field width · arcmin", self.field_width),
+        ):
+            caption = QLabel(label)
+            caption.setBuddy(field)
+            target_form.addWidget(caption)
+            target_form.addWidget(field)
+
+        self.paste_target_btn = QPushButton("Paste RA + Dec")
+        self.paste_target_btn.setToolTip(
+            "Paste a pair from the clipboard, e.g. 154.7709 46.4537 "
+            "or 10:19:05 +46:27:13")
+        self.paste_target_btn.clicked.connect(self.paste_coordinate_pair)
+        target_form.addWidget(self.paste_target_btn)
+        self.target_hint = QLabel("Decimal degrees, decimal comma or sexagesimal")
+        self.target_hint.setObjectName("target_validation_hint")
+        self.target_hint.setWordWrap(True)
+        self.target_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        target_form.addWidget(self.target_hint)
+
+        target_form.addWidget(QLabel("Data releases"))
         releases_container = QWidget()
         releases = QHBoxLayout(releases_container)
         releases.setContentsMargins(0, 0, 0, 0)
@@ -122,7 +203,7 @@ class SurveyExplorer(QMainWindow):
             self.release_boxes[dr] = check
             releases.addWidget(check)
         releases.addStretch(1)
-        form.addRow(releases_container)
+        target_form.addWidget(releases_container)
         actions = QHBoxLayout()
         self.search_btn = QPushButton("Find data")
         self.search_btn.setToolTip("Discover Legacy archive bricks for this ICRS field")
@@ -131,7 +212,7 @@ class SurveyExplorer(QMainWindow):
         self.center_btn = QPushButton("Show target")
         self.center_btn.clicked.connect(self.show_viewer)
         actions.addWidget(self.center_btn)
-        form.addRow(actions)
+        target_form.addLayout(actions)
         secondary_actions = QHBoxLayout()
         self.diagnostic_btn = QPushButton("Viewer status")
         self.diagnostic_btn.clicked.connect(self.show_viewer_diagnostics)
@@ -139,7 +220,7 @@ class SurveyExplorer(QMainWindow):
         self.external_btn = QPushButton("Open in browser")
         self.external_btn.clicked.connect(self.open_viewer_in_browser)
         secondary_actions.addWidget(self.external_btn)
-        form.addRow(secondary_actions)
+        target_form.addLayout(secondary_actions)
         panel.addWidget(target_box)
 
         viewer_controls = QHBoxLayout()
@@ -427,7 +508,43 @@ class SurveyExplorer(QMainWindow):
         self.sky.setZoomFactor(float(value))
 
     def _field(self):
+        # Check the editable text only when a scientific action is requested.
         return SkyField(self.ra.value(), self.dec.value(), self.field_width.value())
+
+    def _validated_field(self):
+        """Block network/science actions on malformed pasted coordinates."""
+        for widget in (self.ra, self.dec, self.field_width):
+            try:
+                widget.value()
+            except ValueError as exc:
+                widget._mark_invalid(str(exc))
+                widget.setFocus()
+                widget.selectAll()
+                self.target_hint.setText(str(exc))
+                QMessageBox.warning(self, "Invalid target coordinates", str(exc))
+                return None
+        try:
+            field = self._field()
+        except ValueError as exc:
+            self.target_hint.setText(str(exc))
+            QMessageBox.warning(self, "Invalid target coordinates", str(exc))
+            return None
+        self.target_hint.setText("ICRS target ready · press Find data or Show target")
+        return field
+
+    def paste_coordinate_pair(self):
+        """Explicit clipboard action; never read clipboard during normal editing."""
+        text = QApplication.clipboard().text()
+        try:
+            ra, dec = parse_coordinate_pair(text)
+        except ValueError as exc:
+            self.target_hint.setText(str(exc))
+            QMessageBox.warning(self, "Cannot paste RA / Dec", str(exc))
+            return
+        self.ra.setValue(ra)
+        self.dec.setValue(dec)
+        self.target_hint.setText(
+            f"Pasted ICRS: RA {ra:.6f}°, Dec {dec:+.6f}°")
 
     def _preferred_viewer_region(self, release: str):
         """Return a north/south layer only for a field wholly on one side."""
@@ -452,6 +569,8 @@ class SurveyExplorer(QMainWindow):
 
     def show_viewer(self, *_):
         """Navigate Qt directly to the hosted viewer, never as an iframe."""
+        if self._validated_field() is None:
+            return
         link = self._viewer_link()
         self.message.setText(
             "Opening official Legacy Survey Viewer; FOV control is separate "
@@ -465,7 +584,10 @@ class SurveyExplorer(QMainWindow):
         hit = self.hits[row]
         mid_ra = (hit.ra1 + ((hit.ra2-hit.ra1) % 360.)/2.) % 360.
         mid_dec = (hit.dec1 + hit.dec2) / 2.
-        field = SkyField(mid_ra, mid_dec, self.field_width.value())
+        field_width = self._validated_field()
+        if field_width is None:
+            return
+        field = SkyField(mid_ra, mid_dec, field_width.width_arcmin)
         link = self._viewer_link(
             field=field, release=hit.release, region=hit.region)
         self.sky.load(QUrl(link))
@@ -475,6 +597,8 @@ class SurveyExplorer(QMainWindow):
 
     def open_viewer_in_browser(self):
         """Exact ICRS position and release, independent of QtWebEngine networking."""
+        if self._validated_field() is None:
+            return
         QDesktopServices.openUrl(QUrl(self._viewer_link()))
 
     def _viewer_load_started(self):
@@ -561,7 +685,9 @@ class SurveyExplorer(QMainWindow):
             self.message.setText(f"{done}/{total}: {path}")
 
     def search(self):
-        field = self._field()
+        field = self._validated_field()
+        if field is None:
+            return
         releases = tuple(dr for dr, box in self.release_boxes.items() if box.isChecked())
         if not releases:
             QMessageBox.warning(self, "Select a release", "Choose at least one data release.")
@@ -897,7 +1023,9 @@ class SurveyExplorer(QMainWindow):
                 self, "Invalid sky radii",
                 "Require 0 < object radius <= sky-inner < sky-outer <=1200 arcsec")
             return
-        field = self._field()
+        field = self._validated_field()
+        if field is None:
+            return
         destination = Path(path) / "coverage-reports" / (
             f"{hit.release}_{hit.region}_{hit.name}_{band}.json")
         self.message.setText("Computing source/sky pixel coverage from local FITS…")
