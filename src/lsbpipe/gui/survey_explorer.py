@@ -163,8 +163,15 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(self.summary)
         self.bricks = QTableWidget(0, 4)
         self.bricks.setAccessibleName("Release bricks and median exposure diagnostics")
-        self.bricks.setHorizontalHeaderLabels(["DR", "Region", "Brick", "Median NEXP g/r/i/z"])
-        self.bricks.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.bricks.setHorizontalHeaderLabels(["DR", "Region", "Brick", "NEXP g/r/i/z"])
+        # Avoid giving narrow DR/region columns the same width as NEXP.
+        for column in (0, 1, 2):
+            self.bricks.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeToContents)
+        self.bricks.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.Stretch)
+        self.bricks.horizontalHeaderItem(3).setToolTip(
+            "Median exposures per brick in g, r, i, z; not pixel coverage")
         self.bricks.setMinimumHeight(140)
         panel.addWidget(QLabel("Release-covered intersecting bricks"))
         panel.addWidget(self.bricks, 1)
@@ -213,6 +220,11 @@ class SurveyExplorer(QMainWindow):
         self.clear_visible_btn = QPushButton("Clear visible")
         self.clear_visible_btn.clicked.connect(lambda: self._set_visible_selection(False))
         selection_actions.addWidget(self.clear_visible_btn)
+        self.clear_all_btn = QPushButton("Clear all")
+        self.clear_all_btn.setToolTip(
+            "Deselect every file, including entries hidden by the current filters")
+        self.clear_all_btn.clicked.connect(self._clear_all_selection)
+        selection_actions.addWidget(self.clear_all_btn)
         self.science_btn = QPushButton("Science quartet")
         self.science_btn.setToolTip(
             "Select IMAGE, INVVAR, NEXP, MASKBITS for one selected brick and band")
@@ -232,10 +244,21 @@ class SurveyExplorer(QMainWindow):
             2, QHeaderView.Stretch)
         self.files.setTextElideMode(Qt.ElideMiddle)
         self.files.setAlternatingRowColors(True)
+        self.files.setMinimumHeight(148)
         data_panel.addWidget(self.files, 3)
 
-        qa_layout = QHBoxLayout()
-        qa_layout.addWidget(QLabel("Coverage QA (arcsec)"))
+        # Advanced local FITS coverage parameters are available on demand;
+        # they should not permanently hide the file table's rows.
+        self.qa_toggle = QPushButton("Coverage QA settings")
+        self.qa_toggle.setCheckable(True)
+        self.qa_toggle.setChecked(False)
+        self.qa_toggle.setToolTip(
+            "Show circular source and sky-ring radii for local FITS diagnostics")
+        data_panel.addWidget(self.qa_toggle)
+        self.qa_widget = QWidget()
+        qa_layout = QHBoxLayout(self.qa_widget)
+        qa_layout.setContentsMargins(0, 0, 0, 0)
+        qa_layout.addWidget(QLabel("Radii (arcsec):"))
         self.target_radius = QDoubleSpinBox()
         self.target_radius.setRange(1, 1000)
         self.target_radius.setDecimals(1)
@@ -259,7 +282,9 @@ class SurveyExplorer(QMainWindow):
             "Analyse an already-downloaded brick using IMAGE, INVVAR, NEXP and MASKBITS")
         self.qa_btn.clicked.connect(self.inspect_coverage)
         qa_layout.addWidget(self.qa_btn)
-        data_panel.addLayout(qa_layout)
+        data_panel.addWidget(self.qa_widget)
+        self.qa_toggle.toggled.connect(self.qa_widget.setVisible)
+        self.qa_widget.setVisible(False)
 
         bottom = QHBoxLayout()
         self.save_btn = QPushButton("Save manifest")
@@ -340,7 +365,13 @@ class SurveyExplorer(QMainWindow):
         visible = not self.data_drawer.isVisible()
         self.data_drawer.setVisible(visible)
         if visible:
-            self.resizeDocks([self.data_drawer], [260], Qt.Vertical)
+            self._size_data_drawer()
+
+    def _size_data_drawer(self):
+        # Keep several product rows visible while allowing the central
+        # image to retain useful height on laptop screens.
+        preferred = max(290, min(390, round(self.height() * 0.42)))
+        self.resizeDocks([self.data_drawer], [preferred], Qt.Vertical)
 
     def _drawer_visibility_changed(self, visible):
         self.data_toggle.setText(
@@ -533,7 +564,7 @@ class SurveyExplorer(QMainWindow):
         self._fill_brick_filters()
         self._fill_files()
         self.data_drawer.show()
-        self.resizeDocks([self.data_drawer], [260], Qt.Vertical)
+        self._size_data_drawer()
         self.message.setText(f"{len(manifest['products'])} candidate files")
 
     def _fill_brick_filters(self):
@@ -643,6 +674,18 @@ class SurveyExplorer(QMainWindow):
             f"Science quartet selected: {hit.release.upper()} "
             f"{hit.region} {hit.name} {band}-band. "
             "Verify URLs before downloading.")
+
+    def _clear_all_selection(self):
+        """Explicitly deselect visible AND hidden products."""
+        if self.manifest is None:
+            return
+        for row in range(self.files.rowCount()):
+            self.files.cellWidget(
+                row, 0).findChild(QCheckBox).setChecked(False)
+        self._update_selection_summary()
+        self.message.setText(
+            "All products deselected, including hidden rows. "
+            "Use Select visible or Science quartet to choose download files.")
 
     def _selected(self):
         if not self.manifest:
