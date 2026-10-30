@@ -6,6 +6,7 @@ top-level QtWebEngine page (not iframe) or in the user's browser.
 """
 from __future__ import annotations
 from urllib.parse import urlencode
+import math
 from .legacy import SkyField, regions_for_release
 
 VIEWER_ROOT = "https://www.legacysurvey.org/viewer/"
@@ -36,10 +37,62 @@ def viewer_layer(release: str, region: str | None = None) -> str:
     return _LAYER_MAP[key]
 
 
+
+def field_polygon(field: SkyField, *, subdivisions: int = 4
+                  ) -> tuple[tuple[float, float], ...]:
+    """Closed square search-area boundary on the local ICRS TAN plane.
+
+    The width is the side length of the region in arcminutes, not the
+    screen size. Four equal-length sides in the local tangent plane are
+    sampled as sky positions and returned as (RA deg, Dec deg) vertices.
+    The great-circle connections in the hosted Viewer approximate these
+    curved TAN edges; subdivisions improve that approximation. This is
+    display geometry only, not a new discovery/coverage acceptance rule.
+    """
+    if not isinstance(subdivisions, int) or not 1 <= subdivisions <= 32:
+        raise ValueError("subdivisions must be an integer between 1 and 32")
+    ra = math.radians(field.ra_deg)
+    dec = math.radians(field.dec_deg)
+    center = (math.cos(dec)*math.cos(ra),
+              math.cos(dec)*math.sin(ra), math.sin(dec))
+    east = (-math.sin(ra), math.cos(ra), 0.)
+    north = (-math.sin(dec)*math.cos(ra),
+             -math.sin(dec)*math.sin(ra), math.cos(dec))
+    half = math.tan(math.radians(field.width_arcmin / 120.))
+
+    # Counter-clockwise boundary; every successive coordinate corresponds
+    # to a sample on a projected straight edge, not an RA/Dec rectangle.
+    corners = ((-half, -half), (half, -half),
+               (half, half), (-half, half))
+    coords = []
+    for i, (u0, v0) in enumerate(corners):
+        u1, v1 = corners[(i + 1) % 4]
+        for j in range(subdivisions):
+            t = j / subdivisions
+            u = u0 + (u1-u0)*t
+            v = v0 + (v1-v0)*t
+            x = center[0] + u*east[0] + v*north[0]
+            y = center[1] + u*east[1] + v*north[1]
+            z = center[2] + u*east[2] + v*north[2]
+            sky_ra = math.degrees(math.atan2(y, x)) % 360
+            sky_dec = math.degrees(math.atan2(z, math.hypot(x,y)))
+            coords.append((sky_ra, sky_dec))
+    coords.append(coords[0])  # make the closed outline explicit in poly
+    return tuple(coords)
+
+
+def field_polygon_query(field: SkyField) -> str:
+    """Value of official Legacy Viewer poly= URL parameter (RA,Dec pairs)."""
+    points = field_polygon(field)
+    return ",".join(f"{value:.9f}" for pair in points for value in pair)
+
+
 def viewer_url(field: SkyField, *, release: str = "dr9",
                region: str | None = None, zoom: int = 13,
                mark_target: bool = True,
-               view: str = "image") -> str:
+               view: str = "image",
+               show_field: bool = False,
+               overlay_field: SkyField | None = None) -> str:
     """Create an exact-coordinate launch URL to the *hosted* Legacy viewer.
 
     Zoom is a Leaflet integer zoom level and is not directly a field width in
@@ -57,4 +110,6 @@ def viewer_url(field: SkyField, *, release: str = "dr9",
             "zoom":str(zoom), "layer":layer}
     if mark_target:
         args["mark"] = f"{field.ra_deg:.7f},{field.dec_deg:.7f}"
+    if show_field:
+        args["poly"] = field_polygon_query(overlay_field or field)
     return VIEWER_ROOT + "?" + urlencode(args)
