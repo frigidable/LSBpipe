@@ -220,9 +220,6 @@ class SurveyExplorer(QMainWindow):
         actions.addWidget(self.center_btn)
         target_form.addLayout(actions)
         secondary_actions = QHBoxLayout()
-        self.diagnostic_btn = QPushButton("Viewer status")
-        self.diagnostic_btn.clicked.connect(self.show_viewer_diagnostics)
-        secondary_actions.addWidget(self.diagnostic_btn)
         self.external_btn = QPushButton("Open in browser")
         self.external_btn.clicked.connect(self.open_viewer_in_browser)
         secondary_actions.addWidget(self.external_btn)
@@ -237,15 +234,6 @@ class SurveyExplorer(QMainWindow):
         self.view_mode.addItem("Residual", "resid")
         self.view_mode.currentIndexChanged.connect(self.show_viewer)
         viewer_controls.addWidget(self.view_mode, 2)
-        viewer_controls.addWidget(QLabel("Web scale"))
-        self.web_scale = QDoubleSpinBox()
-        self.web_scale.setRange(0.55, 1.30)
-        self.web_scale.setSingleStep(0.05)
-        self.web_scale.setDecimals(2)
-        self.web_scale.setValue(0.80)
-        self.web_scale.setToolTip("Qt page scale; not astronomical map zoom")
-        self.web_scale.valueChanged.connect(self._apply_web_scale)
-        viewer_controls.addWidget(self.web_scale)
         panel.addLayout(viewer_controls)
         self.data_toggle = QPushButton("Files and coverage")
         self.data_toggle.setAccessibleName("Show or hide file selection and coverage")
@@ -254,9 +242,6 @@ class SurveyExplorer(QMainWindow):
         self.data_toggle.clicked.connect(self._toggle_data_drawer)
         panel.addWidget(self.data_toggle)
 
-        self.summary = QLabel("No catalogs queried yet; no coverage claims.")
-        self.summary.setWordWrap(True)
-        panel.addWidget(self.summary)
         self.bricks = QTableWidget(0, 4)
         self.bricks.setAccessibleName("Release bricks and median exposure diagnostics")
         self.bricks.setHorizontalHeaderLabels(["DR", "Region", "Brick", "NEXP g/r/i/z"])
@@ -272,6 +257,7 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(QLabel("Release-covered intersecting bricks"))
         panel.addWidget(self.bricks, 1)
         self.bricks.cellDoubleClicked.connect(self.preview_brick)
+        self.bricks.itemSelectionChanged.connect(self._selected_brick_changed)
         panel.addWidget(QLabel("Double-click a brick to preview its center"))
         panel.addStretch(1)
 
@@ -448,7 +434,7 @@ class SurveyExplorer(QMainWindow):
         self.sky = QWebEngineView()
         self.sky.setAccessibleName("Official Legacy Survey Viewer remote preview")
         self.sky.setPage(_DiagnosticWebPage(self.sky))
-        self.sky.setZoomFactor(self.web_scale.value())
+        self.sky.setZoomFactor(0.8)
         self.sky.loadStarted.connect(self._viewer_load_started)
         self.sky.loadFinished.connect(self._viewer_load_finished)
         self.navigation_scroll = QScrollArea()
@@ -508,10 +494,6 @@ class SurveyExplorer(QMainWindow):
     def _drawer_visibility_changed(self, visible):
         self.data_toggle.setText(
             "Hide files and coverage" if visible else "Files and coverage")
-
-    def _apply_web_scale(self, value):
-        """Web UI scaling, independent of world-coordinate zoom."""
-        self.sky.setZoomFactor(float(value))
 
     def _field(self):
         # Check the editable text only when a scientific action is requested.
@@ -578,10 +560,14 @@ class SurveyExplorer(QMainWindow):
         if region is None:
             region = self._preferred_viewer_region(release)
         target = overlay_field or self._field()
+        selected_row = self.bricks.currentRow()
+        active = (self.hits[selected_row]
+                  if 0 <= selected_row < len(self.hits) else None)
         return viewer_url(field or self._field(), release=release,
                           region=region, view=self.view_mode.currentData(),
                           zoom=suggested_zoom(target), mark_target=mark_target,
-                          show_field=True, overlay_field=target)
+                          show_field=True, overlay_field=target,
+                          bricks=self.hits, selected_brick=active)
 
     def show_viewer(self, *_):
         """Navigate Qt directly to the hosted viewer, never as an iframe."""
@@ -597,6 +583,20 @@ class SurveyExplorer(QMainWindow):
             "Opening Legacy Viewer with the ICRS search-area outline. "
             "The colored boundary is a selection preview, not a coverage map.")
         self.sky.load(QUrl(link))
+
+    def _selected_brick_changed(self):
+        """Refresh the map overlay when a brick is selected in the table.
+
+        The hosted site exposes native poly outlines but no documented API
+        for per-polygon hover opacity. Selection is therefore explicit.
+        """
+        if not self.hits or self.worker is not None:
+            return
+        try:
+            self._field()
+        except ValueError:
+            return
+        self.sky.load(QUrl(self._viewer_link()))
 
     def preview_brick(self, row: int, _column: int):
         """Preview a brick center; preserve current catalogue/selection state."""
@@ -636,7 +636,7 @@ class SurveyExplorer(QMainWindow):
         else:
             self.message.setText(
                 "Embedded Legacy Viewer page failed. Use Open in browser "
-                "or Viewer status to check the cause.")
+                "to inspect it in a separate browser.")
 
     def show_viewer_diagnostics(self):
         """Distinguish HTTP document navigation from tile/script rendering."""
@@ -738,24 +738,10 @@ class SurveyExplorer(QMainWindow):
                                for b in ("g", "r", "i", "z"))
             for col, value in enumerate((h.release.upper(), h.region, h.name, medians)):
                 self.bricks.setItem(row, col, QTableWidgetItem(str(value)))
-        unique = manifest.get("unique_spatial_bricks", len(hits))
-        related = len(manifest.get("related_release_groups", ()))
-        selected_releases = {
-            name for name, checkbox in self.release_boxes.items()
-            if checkbox.isChecked()}
-        discovered_releases = {hit.release for hit in hits}
-        absent = ", ".join(sorted(selected_releases - discovered_releases))
-        note = (
-            f"{len(hits)} release records across {unique} sky bricks. "
-            f"{related} northern DR9/DR11 input-related groups. "
-            "The reductions are NOT presumed identical. "
-            "NEXP values are brick medians, not pixel coverage.")
-        if absent:
-            note += f" No matching bricks for selected: {absent.upper()}."
-        self.summary.setText(note)
-        self.summary.setToolTip(
-            "Different data releases may reuse exposures but contain distinct "
-            "coadd processing. Do not treat them as independent observations.")
+        # The table is the source for release and NEXP context.
+        # The map shows unique sky-brick outlines; no duplicate prose needed.
+        self.bricks.clearSelection()
+        self.show_viewer()
         self._fill_brick_filters()
         self._fill_files()
         self.data_drawer.show()
