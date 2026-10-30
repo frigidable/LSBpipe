@@ -25,6 +25,15 @@ class OfflineViewer(QWidget):
     def setPage(self, _page):
         pass
 
+    def page(self):
+        return self
+
+    def runJavaScript(self, script, callback=None):
+        # Never execute remote JS in offline tests; honor failure callback.
+        self._last_script = script
+        if callback is not None:
+            callback("unavailable")
+
     def setZoomFactor(self, zoom):
         self._zoom = float(zoom)
 
