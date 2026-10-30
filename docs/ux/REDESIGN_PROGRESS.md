@@ -153,3 +153,39 @@ map height; **the right-inspector version needs a fresh real Windows
 screenshot before visual approval**.
 
 No automatic unification of DR9/DR11 outputs or science data changes.
+
+## Pasteable coordinates and field width — Windows usability repair
+
+The Windows user reported that the original RA/Dec/FOV spin boxes did not
+allow natural text pasting and looked cumbersome. Implemented in
+\`src/lsbpipe/gui/target_input.py\` and \`survey_explorer.py\`:
+
+- Three wide, normal **QLineEdit** fields, without up/down arrows or a
+  locale-specific spin-box editor. Standard Ctrl+A/C/V, context menu and
+  keyboard selection work as with ordinary desktop text entry.
+- Labels are above their fields, preserving usable text width inside the
+  narrow left navigation; focus and invalid-state borders follow the
+  application's system color palette where possible.
+- RA is **ICRS degrees** when entered as decimal (\`154.7709\` or
+  \`154,7709\`). Hour angle syntax is explicit:
+  \`10:19:05\` / \`10h19m05s\` → degrees.
+- Dec accepts signed decimal degrees or \`±dd:mm:ss\` syntax.
+- Square field width defaults to **arcminutes**, but also accepts
+  \`0.25 deg\` and \`900 arcsec\`; all are normalized to arcminutes for
+  the existing \`SkyField\` geometry.
+- **Paste RA + Dec** reads two clipboard coordinates explicitly, supporting
+  space, comma, semicolon, newline and tab delimiters. It validates both
+  before changing either one, and leaves field width untouched.
+- Validation is deferred until editing finishes or the user requests an
+  action. Invalid values remain visible/editable, get a highlighted border,
+  and **cannot** trigger a survey search, Viewer navigation or FITS QA.
+  No clamping to valid numbers and no silent unit conversions.
+- Viewer remains remote; ordinary text edits do not initiate web reloads.
+
+Regression tests cover decimal comma, sexagesimal conversion, angular
+units, malformed/too-large coordinates, Ctrl+V into a real Qt widget,
+clipboard pair paste and fail-closed archive search. These tests do
+not require the DESI servers or remote Viewer.
+
+**Status:** code staged in Draft PR #4; local Windows visual and keyboard
+confirmation is required after CI. The science core is unchanged.
