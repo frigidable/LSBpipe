@@ -44,3 +44,46 @@ def offline_legacy_viewer():
          patch.object(gui.SurveyExplorer, "show_viewer", autospec=True,
                       return_value=None):
         yield
+
+
+def make_offline_catalog():
+    """Eight release records, four unique north bricks, 88 URL candidates.
+
+    All numbers are synthetic. No network request and no actual sky coverage
+    or source FITS are represented by this dataset.
+    """
+    from lsbpipe.surveys.legacy import BrickHit, SkyField, build_manifest
+    field = SkyField(154.7709, 46.4537, 15.)
+    names = ("1544p465", "1546p462", "1548p465", "1549p462")
+    hits = []
+    for release in ("dr9", "dr11"):
+        for name in names:
+            hits.append(BrickHit(
+                release, "north", name, 154.2, 155.0, 46.1, 46.8,
+                {"g": 3, "r": 3, "z": 3}))
+    return hits, build_manifest(field, hits)
+
+
+def apply_offline_state(window, state: str):
+    """Populate real Qt widgets with deterministic fake catalog/file states."""
+    from unittest.mock import patch
+    from lsbpipe.gui import survey_explorer as gui
+    if state == "S0":
+        return
+    hits, manifest = make_offline_catalog()
+    window._receive_search((hits, manifest))
+    if state == "S1":
+        return
+    if state == "S2":
+        window.band_filter.setCurrentText("r")
+        window.kind_filter.setCurrentText("image")
+        assert len(window._selected()) == 88  # filters never discard hidden selection
+        return
+    if state == "S3":
+        window.bricks.selectRow(0)
+        with patch.object(gui.QInputDialog, "getItem", return_value=("r", True)):
+            window.select_science_quartet()
+        assert len(window._selected()) == 4
+        window.brick_filter.setCurrentText(hits[0].name)
+        return
+    raise ValueError(f"Unknown offline state: {state}")
