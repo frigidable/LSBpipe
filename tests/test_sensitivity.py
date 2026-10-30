@@ -144,3 +144,52 @@ def test_exact_overlap_when_photutils_available():
                               [0., 8., 16.], {'raw': 0., 'other': .04},
                               reference='raw', backend='exact')
     check_identity(out, 'other')
+
+
+def test_fitted_candidate_provenance_matches_observation_or_fails_closed():
+    from lsbpipe.background import fit_observation_background
+
+    class W:
+        def __init__(self, offset=0.): self.offset = offset
+        def to_header(self, relax=True): return {'CRPIX1': 10. + self.offset}
+
+    shape = (40, 42)
+    yy, xx = np.indices(shape)
+    image = .003 + .0002*xx - .0004*yy
+    ivar = np.ones(shape)
+    obs = ObservationSet(image, ivar, None, W(), 'r', 'dr9', .262**2,
+                         np.ones(shape, bool), {})
+    state = scene_from_observation(obs, 'galaxy')
+    train = (yy % 5 != 0) & (xx % 6 != 0)
+    hold = ~train
+    state = state.with_layer(MaskLayer('sky_fit', LayerKind.SKY_TRAIN,
+                                      train, state.grid_id, 'r'))
+    state = state.with_layer(MaskLayer('sky_holdout', LayerKind.SKY_HOLDOUT,
+                                      hold, state.grid_id, 'r'))
+    fitted = fit_observation_background(obs, state, method='tilted_plane')
+    assert fitted.fit_status == FitStatus.FITTED
+    assert fitted.grid_id == state.grid_id
+    assert fitted.band == 'r' and fitted.image_shape == shape
+    result = compare_observation_backgrounds(
+        obs, state, ReferenceGeometry(21, 20, .7), [0, 8, 15],
+        {'nominal': 0., 'plane': fitted}, reference='nominal')
+    check_identity(result, 'plane')
+    wrong = BackgroundCandidate('constant', FitStatus.FITTED,
+                                HoldoutStatus.MEASURED_UNCALIBRATED,
+                                (20., 19.), (.003, 0., 0.), 30, 30, 1., 5,
+                                0., 0., 0., 0., (),
+                                grid_id='wrong', band='r', image_shape=shape)
+    with pytest.raises(ValueError, match='source grid'):
+        compare_observation_backgrounds(
+            obs, state, ReferenceGeometry(21, 20, .7), [0, 8, 15],
+            {'nominal': 0., 'wrong': wrong}, reference='nominal')
+    untagged = BackgroundCandidate('constant', FitStatus.FITTED,
+                                   HoldoutStatus.MEASURED_UNCALIBRATED,
+                                   (20., 19.), (.003, 0., 0.), 30, 30, 1., 5,
+                                   0., 0., 0., 0., ())
+    with pytest.raises(ValueError, match='source grid'):
+        compare_observation_backgrounds(
+            obs, state, ReferenceGeometry(21, 20, .7), [0, 8, 15],
+            {'nominal': 0., 'untagged': untagged}, reference='nominal')
+    with pytest.raises(ValueError, match='shape mismatch'):
+        fitted.image((20, 21))
