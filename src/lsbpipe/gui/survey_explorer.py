@@ -590,7 +590,7 @@ class SurveyExplorer(QMainWindow):
         The hosted site exposes native poly outlines but no documented API
         for per-polygon hover opacity. Selection is therefore explicit.
         """
-        if not self.hits or self.worker is not None:
+        if not self.hits:
             return
         try:
             self._field()
