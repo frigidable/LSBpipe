@@ -119,3 +119,37 @@ Follow-up changes in this PR:
 newer revision pending. The screenshot observation verifies the
 problem in the earlier revision, not its resolution. Scientific
 algorithms and archived FITS data remain unchanged.
+
+## User-directed layout iteration — right-side scientific inspector
+
+The user requested replacing the bottom dock with an inspector **to
+the right of the Legacy Viewer**. This arrangement preserves the full
+vertical map while keeping brick discovery on the left.
+
+Implemented experimentally:
+- `QDockWidget` is now attached to `RightDockWidgetArea`, opened
+  after search, and closable from the navigation toggle.
+- Width defaults to about 21.5% of window width, clamped to
+  285–415px. Navigation width adjusts when the inspector opens,
+  preserving at least ~55% for the central preview across the
+  automated 1366/1600/1920 width tests.
+- The narrow panel uses a vertically arranged product-set selector,
+  URL check, brick/band filters, product-kind filter, summary,
+  four-product science preset and select/clear controls.
+- A four-column table shows `Use`, `Product / provenance`, `HTTP`
+  and `MiB`. Compact identities include DR, brick and product/band;
+  complete paths and raw HTTP evidence are retained in tooltips and
+  in the unchanged manifest. Abbreviations `OK`, `404`, `ERR`
+  and `?` are display-only.
+- Coverage QA geometry remains behind its existing toggle, with
+  vertical radius fields so no part of the form needs wide geometry.
+- Save manifest and Download selected remain pinned in the footer
+  and the network/photometry logic is untouched.
+
+This supersedes the experimental *bottom* dock location described in
+previous checkpoints. The earlier Windows screenshot established
+that the bottom panel was functionally workable but used too much
+map height; **the right-inspector version needs a fresh real Windows
+screenshot before visual approval**.
+
+No automatic unification of DR9/DR11 outputs or science data changes.
