@@ -101,3 +101,41 @@ issues before changing proxy/certificate settings; never disable TLS checks.
 
 URL generation and GUI integration have offline unit tests; on-device
 rendering and network retrieval still require a Windows user validation.
+
+## UX P1 — compact explorer and preview controls
+
+The `Survey Explorer` v0.4 development branch also includes these refinements:
+
+- **Viewer mode:** Image / Tractor model / residual, using documented
+  `-model` and `-resid` Legacy Viewer layer suffixes. These are *preview*
+  products, not replacement inputs for calibrated LSB measurements.
+- **Web scale:** adjusts the embedded QtWebEngine page zoom independently of
+  the viewer's astronomical map zoom or the requested brick-search area. The
+  initial scale is 0.80 to make hosted Legacy controls fit better on a Windows
+  desktop; the researcher can increase or decrease it.
+- **Brick preview:** double-click an intersecting brick in the left table to
+  navigate the viewer to its RA-wrap-safe midpoint. The typed target RA/Dec
+  and the science `DownloadManifest` are not changed by this preview.
+- **Download table:** short columns for brick, product kind, band, HTTP
+  evidence and size; hover over a product to see its full archive-relative
+  path and HTTPS address.
+- **Filters:** brick, band and product kind. Filtering only hides rows; it
+  does not silently alter the selected set. The `g/r/i/z` band filter retains
+  files shared across bands (`maskbits`, `tractor`). **Select visible** and
+  **Clear visible** affect only displayed rows.
+- **Download preflight:** an explicit confirmation shows the number of selected
+  files, verified/missing/unverified HTTP states, and the *known* size. An
+  unknown size is never counted as a confirmed zero. `HEAD` responses are
+  informational and can be unavailable on some otherwise working hosts.
+
+The selected set persists when filtering; changing from Standard to Extended
+keeps the previously selected files and introduces extra product kinds
+unchecked. A new target search creates a fresh candidate selection.
+
+**Known limitations:** The hosted Legacy Viewer cannot presently send mouse
+pan/zoom state back to Python. Changing Viewer mode or revisiting the target
+reloads the hosted page, so in-browser manual pan position is not retained.
+The product count/known size is a planning estimate, not proof that all remote
+content exists or can be recovered. Automatic mosaicking, per-pixel NEXP/IVAR
+coverage plots, automatic Tractor-derived exclusion masks and scientifically
+calibrated QA remain later milestones.
