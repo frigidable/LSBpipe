@@ -31,13 +31,17 @@ and download exactly these four science products **in a single band**:
 - `nexp-r.fits.fz`
 - `maskbits.fits.fz` (optical bitmask in **HDU1**)
 
-In the GUI, set the brick filter, then **Clear visible**, select just the
-four requested rows for that brick, click **Check selected files**, and
-review any `HTTP_MISSING` or `HTTP_ERROR` statuses before download.
-Be aware that **Clear visible affects only currently shown rows**: if you
-left other bricks selected while filtering, they remain selected. The
-preflight dialog always shows the actual overall selected-file count and
-lets you cancel.
+In the GUI, select the desired **DR9 north brick row** in the
+upper table and press **Science quartet**. Pick the `r` band; this
+explicitly clears *all* previously selected files, including hidden rows,
+and selects only `image-r`, `invvar-r`, `nexp-r`, and the shared
+`maskbits` for that one brick. Then click **Check selected files**
+and review any `HTTP_MISSING` or `HTTP_ERROR` statuses before
+downloading. The preflight confirmation must report **4 selected files**.
+
+Alternatively, manually use **Clear visible** with **All bricks**, **All
+bands**, **All products** active first, before making a filtered
+selection; filtering alone does not clear hidden selections.
 
 After downloading, select the same brick in the upper table, specify a
 circular target radius and a separate sky annulus, and click
