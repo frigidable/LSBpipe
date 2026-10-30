@@ -25,7 +25,7 @@ def offline_explorer(qtbot):
 def test_startup_is_experimental_and_offline(offline_explorer):
     window = offline_explorer
     assert "experimental" in window.windowTitle().lower()
-    assert "No catalogs queried" in window.summary.text()
+    assert window.bricks.rowCount() == 0
     assert window.manifest is None
     assert window.hits == []
     assert window.release_boxes["dr9"].isChecked()
@@ -438,3 +438,25 @@ def test_field_size_change_affects_search_polygon_and_map_framing(
     args_small = parse_qs(urlparse(window._viewer_link()).query)
     assert args_small['zoom'] == ['15']
     assert args_small['poly'] != args['poly']
+
+
+def test_redundant_viewer_controls_and_summary_removed(offline_explorer):
+    w = offline_explorer
+    assert not hasattr(w, "diagnostic_btn")
+    assert not hasattr(w, "web_scale")
+    assert not hasattr(w, "summary")
+    assert w.bricks.isVisible()
+
+
+def test_brick_selection_changes_native_multi_polygon_link(offline_explorer):
+    from urllib.parse import urlparse, parse_qs
+    w = offline_explorer
+    apply_offline_state(w, "S1")
+    unselected = parse_qs(urlparse(w._viewer_link()).query)["poly"][0]
+    assert len(unselected.split(";")) == 5  # 4 distinct bricks + target
+    w.bricks.selectRow(0)
+    selected = parse_qs(urlparse(w._viewer_link()).query)["poly"][0]
+    assert len(selected.split(";")) == 7
+    assert selected != unselected
+    w.bricks.clearSelection()
+    assert parse_qs(urlparse(w._viewer_link()).query)["poly"][0] == unselected
