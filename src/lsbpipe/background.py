@@ -82,6 +82,9 @@ class BackgroundCandidate:
     holdout_rms_residual_nMgy: float | None
     tiles: tuple[HoldoutTile, ...]
     warnings: tuple[str, ...] = ()
+    grid_id: str | None = None
+    band: str | None = None
+    image_shape: tuple[int, int] | None = None
 
     def evaluate_at(self, x_pix, y_pix):
         """Evaluate a residual-sky candidate in nanomaggies per pixel."""
@@ -93,6 +96,8 @@ class BackgroundCandidate:
 
     def image(self, shape: tuple[int, int]) -> np.ndarray:
         """Materialize a fresh model map without modifying the input."""
+        if self.image_shape is not None and tuple(shape) != tuple(self.image_shape):
+            raise ValueError('Candidate source image shape mismatch')
         yy, xx = np.indices(shape, dtype=float)
         return np.asarray(self.evaluate_at(xx, yy), dtype=float)
 
@@ -192,7 +197,8 @@ def fit_residual_background(
     def failure(status, cond=None, iterations=0):
         return BackgroundCandidate(method, status, HoldoutStatus.NOT_EVALUATED,
                                    ref, None, ntrain, nheld, cond, iterations,
-                                   None, None, None, None, (), (status.value,))
+                                   None, None, None, None, (), (status.value,),
+                                   grid_id=grid_id, band=scene.band, image_shape=scene.shape)
 
     if ntrain < settings.min_training_pixels:
         return failure(FitStatus.INSUFFICIENT_SKY)
@@ -216,7 +222,8 @@ def fit_residual_background(
              else (float(fit[0]), float(fit[1])/xs, float(fit[2])/ys))
     provisional = BackgroundCandidate(
         method, FitStatus.FITTED, HoldoutStatus.NOT_EVALUATED, ref, coeff,
-        ntrain, nheld, cond, iterations, None, None, None, None, ())
+        ntrain, nheld, cond, iterations, None, None, None, None, (),
+        grid_id=grid_id, band=scene.band, image_shape=scene.shape)
     residual_train = values - provisional.evaluate_at(xx, yy)
     hy, hx = np.nonzero(held.valid)
     residual_held = image[hy, hx] - provisional.evaluate_at(hx, hy)
@@ -251,7 +258,8 @@ def fit_residual_background(
         _rms(residual_train),
         float(np.median(residual_held)) if nheld else None,
         _rms(residual_held) if nheld else None,
-        tuple(tiles), tuple(warnings))
+        tuple(tiles), tuple(warnings),
+        grid_id=grid_id, band=scene.band, image_shape=scene.shape)
 
 
 def fit_observation_background(observation, scene: SceneState, *, method,
