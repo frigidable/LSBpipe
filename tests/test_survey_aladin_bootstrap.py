@@ -45,3 +45,23 @@ def test_http_handler_has_no_general_directory_access():
     assert _AladinPageHandler.do_GET.__doc__ is None
     assert "if self.path != '/':" in __import__('inspect').getsource(
         _AladinPageHandler.do_GET)
+
+def test_diagnostics_serializes_browser_result_and_exposes_raw_status():
+    import inspect
+    from lsbpipe.gui.survey_explorer import SurveyExplorer, _DiagnosticWebPage
+    diagnostics = inspect.getsource(SurveyExplorer.show_map_diagnostics)
+    assert 'JSON.stringify' in diagnostics
+    assert 'documentReady' in diagnostics
+    assert 'onPageNotice' in diagnostics
+    assert 'recent_console' in diagnostics
+    assert 'json.loads(payload)' in diagnostics
+    assert 'JavaScript returned' in diagnostics
+    assert hasattr(_DiagnosticWebPage, 'javaScriptConsoleMessage')
+
+
+def test_safe_external_fallback_is_available():
+    import inspect
+    from lsbpipe.gui.survey_explorer import SurveyExplorer
+    source = inspect.getsource(SurveyExplorer._build_ui)
+    assert 'Aladin in browser' in source
+    assert 'https://aladin.cds.unistra.fr/AladinLite/' in source
