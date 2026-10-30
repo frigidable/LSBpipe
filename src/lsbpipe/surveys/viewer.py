@@ -101,12 +101,62 @@ def suggested_zoom(field: SkyField) -> int:
 
 
 
+
+def brick_outline(hit) -> str:
+    """Viewer poly fragment for the official brick bounding rectangle.
+
+    The archive RA bounds can wrap 0 degrees. These are rectangular
+    catalog bounding boxes, not science pixel masks or exact intersections.
+    """
+    ra1 = float(hit.ra1) % 360.
+    ra2 = float(hit.ra2) % 360.
+    dec1, dec2 = float(hit.dec1), float(hit.dec2)
+    if not (-90 <= dec1 <= dec2 <= 90):
+        raise ValueError("Invalid brick declination bounds")
+    if not all(math.isfinite(v) for v in (ra1,ra2,dec1,dec2)):
+        raise ValueError("Nonfinite brick geometry")
+    if ra2 < ra1:  # keep continuity through RA=0
+        ra2 += 360.
+    ra_mid = (ra1 + ra2) / 2.
+    # Sample edges so projections curve sensibly at higher declinations.
+    pts = []
+    corners = ((ra1,dec1),(ra2,dec1),(ra2,dec2),(ra1,dec2))
+    for i, (a,b) in enumerate(corners):
+        c,d = corners[(i+1)%4]
+        for j in range(4):
+            t = j/4
+            pts.append((a+(c-a)*t, b+(d-b)*t))
+    pts.append(pts[0])
+    return ",".join(f"{ra%360:.9f},{dec:.9f}" for ra,dec in pts)
+
+
+def combined_polygons(field: SkyField, bricks=(), selected=None) -> str:
+    """Official semicolon-delimited multiple-poly URL syntax.
+
+    Deduplicate spatial bricks reused in multiple releases. A selected
+    brick's repeated outline provides visual emphasis without pretending
+    that the hosted map supports an opacity API.
+    """
+    polygons = [field_polygon_query(field)]
+    seen = set()
+    for hit in bricks:
+        key = (hit.region, hit.name)
+        if key not in seen:
+            polygons.append(brick_outline(hit))
+            seen.add(key)
+    if selected is not None:
+        polygons.extend([brick_outline(selected)] * 2)
+    return ";".join(polygons)
+
+
+
 def viewer_url(field: SkyField, *, release: str = "dr9",
                region: str | None = None, zoom: int = 13,
                mark_target: bool = True,
                view: str = "image",
                show_field: bool = False,
-               overlay_field: SkyField | None = None) -> str:
+               overlay_field: SkyField | None = None,
+               bricks=(), selected_brick=None) -> str:
     """Create an exact-coordinate launch URL to the *hosted* Legacy viewer.
 
     Zoom is a Leaflet integer zoom level and is not directly a field width in
@@ -125,5 +175,6 @@ def viewer_url(field: SkyField, *, release: str = "dr9",
     if mark_target:
         args["mark"] = f"{field.ra_deg:.7f},{field.dec_deg:.7f}"
     if show_field:
-        args["poly"] = field_polygon_query(overlay_field or field)
+        args["poly"] = combined_polygons(
+            overlay_field or field, bricks=bricks, selected=selected_brick)
     return VIEWER_ROOT + "?" + urlencode(args)
