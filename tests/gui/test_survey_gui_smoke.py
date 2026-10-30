@@ -449,15 +449,25 @@ def test_redundant_viewer_controls_and_summary_removed(offline_explorer):
     assert w.bricks.isVisible()
 
 
-def test_brick_selection_changes_native_multi_polygon_link(offline_explorer):
+def test_brick_selection_preserves_embedded_viewer_zoom_and_native_browser_fallback(offline_explorer):
     from urllib.parse import urlparse, parse_qs
+    from unittest.mock import patch
     w = offline_explorer
     apply_offline_state(w, "S1")
-    unselected = parse_qs(urlparse(w._viewer_link()).query)["poly"][0]
-    assert len(unselected.split(";")) == 5  # 4 distinct bricks + target
-    w.bricks.selectRow(0)
-    selected = parse_qs(urlparse(w._viewer_link()).query)["poly"][0]
-    assert len(selected.split(";")) == 7
-    assert selected != unselected
+    # The live Leaflet brick layer handles hover/click in the embedded page.
+    # URL poly= must only include target so that the hosted app does NOT
+    # auto-fit the 4 entire bricks and zoom away from the 5' target field.
+    unselected = parse_qs(urlparse(w._viewer_link()).query)
+    assert len(unselected["poly"][0].split(";")) == 1
+    assert unselected["zoom"] == ["13"]
+    with patch.object(w.sky, "load") as loader:
+        w.bricks.selectRow(0)
+    loader.assert_not_called()
+    assert parse_qs(urlparse(w._viewer_link()).query) == unselected
+    # External browser uses official static multi-poly when JS integration
+    # cannot be installed from our own Qt process.
+    browser = parse_qs(urlparse(w._viewer_link(include_bricks=True)).query)
+    assert len(browser["poly"][0].split(";")) == 7
     w.bricks.clearSelection()
-    assert parse_qs(urlparse(w._viewer_link()).query)["poly"][0] == unselected
+    assert len(parse_qs(urlparse(
+        w._viewer_link(include_bricks=True)).query)["poly"][0].split(";")) == 5
