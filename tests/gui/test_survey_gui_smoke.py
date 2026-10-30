@@ -45,8 +45,8 @@ def test_window_resizes_without_losing_core_widgets(offline_explorer, qtbot, wid
     assert window.sky.isVisible()
     assert window.bricks.isVisible()
     assert window.files.isVisible()
-    assert window.width() == width
-    assert window.height() == height
+    assert window.size().width() == width
+    assert window.size().height() == height
 
 
 def test_filtering_does_not_silently_deselect_hidden_files(offline_explorer):
