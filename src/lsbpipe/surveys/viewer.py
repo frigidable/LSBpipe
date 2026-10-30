@@ -87,6 +87,20 @@ def field_polygon_query(field: SkyField) -> str:
     return ",".join(f"{value:.9f}" for pair in points for value in pair)
 
 
+
+def suggested_zoom(field: SkyField) -> int:
+    """Approximate map framing for the requested width.
+
+    Legacy Viewer zoom depends on the client viewport; this choice is a
+    navigation convenience, NOT a guarantee that the polygon fills a
+    fixed fraction of the on-screen map. The official poly annotation
+    remains authoritative for the selected angular footprint.
+    """
+    return max(0, min(20, round(
+        13 + math.log2(5.0 / field.width_arcmin))))
+
+
+
 def viewer_url(field: SkyField, *, release: str = "dr9",
                region: str | None = None, zoom: int = 13,
                mark_target: bool = True,
