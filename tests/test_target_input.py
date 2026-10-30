@@ -78,7 +78,7 @@ def test_pair_paste(text, expected):
     (parse_width_arcmin, "-1"),
     (parse_width_arcmin, "121"),
     (parse_width_arcmin, "2.1 deg"),
-    (parse_width_arcmin, "0.02 arcsec"),
+    (parse_width_arcmin, "7201 arcsec"),
     (parse_width_arcmin, "15 by 15"),
     (parse_coordinate_pair, ""),
     (parse_coordinate_pair, "154.7709"),
