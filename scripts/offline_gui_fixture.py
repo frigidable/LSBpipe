@@ -31,8 +31,17 @@ class OfflineViewer(QWidget):
     def url(self):
         return QUrl("about:blank")
 
-    def load(self, _url):
-        raise AssertionError("Offline screenshot tests must not load remote Viewer")
+    def load(self, url):
+        # Record navigation requests without opening sockets or creating
+        # Chromium. Brick-selection GUI tests must exercise real signals.
+        if not isinstance(url, QUrl):
+            raise TypeError("Expected QUrl")
+        if url.scheme() != "https" or url.host() != "www.legacysurvey.org":
+            raise AssertionError("Unexpected viewer host in offline fixture")
+        self._requested_url = QUrl(url)
+
+    def last_requested_url(self):
+        return getattr(self, "_requested_url", QUrl())
 
 
 @contextmanager
