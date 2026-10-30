@@ -73,6 +73,13 @@ class SurveyExplorer(QMainWindow):
         self._build_ui()
 
     def _build_ui(self):
+        # Geometry/legibility rules only; retain OS light/dark palette.
+        # The hosted Legacy web page is visually independent of this stylesheet.
+        self.setStyleSheet(
+            "QPushButton, QComboBox, QDoubleSpinBox { min-height: 27px; } "
+            "QPushButton { padding-left: 6px; padding-right: 6px; } "
+            "QTableWidget { font-size: 12px; }"
+        )
         split = QSplitter(Qt.Horizontal, self)
         left = QWidget()
         left.setObjectName("survey_navigation")
@@ -149,6 +156,7 @@ class SurveyExplorer(QMainWindow):
         self.summary.setWordWrap(True)
         panel.addWidget(self.summary)
         self.bricks = QTableWidget(0, 4)
+        self.bricks.setAccessibleName("Release bricks and median exposure diagnostics")
         self.bricks.setHorizontalHeaderLabels(["DR", "Region", "Brick", "Median NEXP g/r/i/z"])
         self.bricks.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.bricks.setMinimumHeight(140)
@@ -214,6 +222,7 @@ class SurveyExplorer(QMainWindow):
         data_panel.addLayout(selection_actions)
 
         self.files = QTableWidget(0, 6)
+        self.files.setAccessibleName("Candidate Legacy FITS files and download selections")
         self.files.setHorizontalHeaderLabels(
             ["Use", "Brick", "Product", "Band", "Evidence", "Size"])
         self.files.horizontalHeader().setSectionResizeMode(
@@ -287,6 +296,7 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(self.message)
 
         self.sky = QWebEngineView()
+        self.sky.setAccessibleName("Official Legacy Survey Viewer remote preview")
         self.sky.setPage(_DiagnosticWebPage(self.sky))
         self.sky.setZoomFactor(self.web_scale.value())
         self.sky.loadStarted.connect(self._viewer_load_started)
@@ -298,8 +308,17 @@ class SurveyExplorer(QMainWindow):
         self.navigation_scroll.setWidget(left)
         self.navigation_scroll.setMinimumWidth(290)
         self.navigation_scroll.setMaximumWidth(425)
+        preview_container = QWidget()
+        preview_layout = QVBoxLayout(preview_container)
+        preview_layout.setContentsMargins(4, 4, 4, 4)
+        preview_layout.setSpacing(4)
+        self.preview_label = QLabel(
+            "REMOTE PREVIEW · Legacy Survey Viewer · not calibrated FITS input")
+        self.preview_label.setAccessibleName("Remote image provenance warning")
+        preview_layout.addWidget(self.preview_label)
+        preview_layout.addWidget(self.sky, 1)
         split.addWidget(self.navigation_scroll)
-        split.addWidget(self.sky)
+        split.addWidget(preview_container)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setChildrenCollapsible(False)
