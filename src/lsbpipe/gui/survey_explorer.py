@@ -192,6 +192,8 @@ class SurveyExplorer(QMainWindow):
         self.target_hint.setWordWrap(True)
         self.target_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         target_form.addWidget(self.target_hint)
+        for field in (self.ra, self.dec, self.field_width):
+            field.textEdited.connect(self._target_edited)
 
         target_form.addWidget(QLabel("Data releases"))
         releases_container = QWidget()
@@ -534,6 +536,13 @@ class SurveyExplorer(QMainWindow):
             return None
         self.target_hint.setText("ICRS target ready · press Find data or Show target")
         return field
+
+    def _target_edited(self, *_):
+        # The existing bricks, if any, describe the previous target field.
+        self.target_hint.setText(
+            "Target changed · run Find data again to refresh the bricks"
+            if self.manifest is not None else
+            "Target edited · press Find data or Show target")
 
     def paste_coordinate_pair(self):
         """Explicit clipboard action; never read clipboard during normal editing."""
