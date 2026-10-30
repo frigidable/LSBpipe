@@ -106,14 +106,23 @@ class SurveyExplorer(QMainWindow):
         form.addRow("RA (ICRS, deg)", self.ra)
         form.addRow("Dec (ICRS, deg)", self.dec)
         form.addRow("Square field width", self.field_width)
-        releases = QHBoxLayout()
+        # On narrow screens a QFormLayout label steals enough width to
+        # truncate the DR9/DR10/DR11 checkbox captions. Give this control
+        # one full-width row instead, retaining actual descriptive labels.
+        form.addRow(QLabel("Releases"))
+        releases_container = QWidget()
+        releases = QHBoxLayout(releases_container)
+        releases.setContentsMargins(0, 0, 0, 0)
+        releases.setSpacing(10)
         self.release_boxes = {}
         for dr in ("dr9", "dr10", "dr11"):
             check = QCheckBox(dr.upper())
             check.setChecked(dr == "dr9")
+            check.setToolTip(f"Include official Legacy Survey {dr.upper()} data")
             self.release_boxes[dr] = check
             releases.addWidget(check)
-        form.addRow("Releases", releases)
+        releases.addStretch(1)
+        form.addRow(releases_container)
         actions = QHBoxLayout()
         self.search_btn = QPushButton("Find data")
         self.search_btn.setToolTip("Discover Legacy archive bricks for this ICRS field")
