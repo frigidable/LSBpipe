@@ -163,18 +163,19 @@ class SurveyExplorer(QMainWindow):
         self.dec.setAccessibleName("Declination ICRS")
         self.dec.setPlaceholderText("+46.4537 or +46:27:13")
         self.dec.setToolTip("Paste ICRS Dec in decimal degrees, or ±dd:mm:ss")
-        self.field_width = TargetTextField(15.0, parse_width_arcmin, decimals=2)
+        self.field_width = TargetTextField(5.0, parse_width_arcmin, decimals=2)
         self.field_width.setObjectName("target_field_width_input")
-        self.field_width.setAccessibleName("Square field width, arcminutes")
-        self.field_width.setPlaceholderText("15  ·  0.25 deg  ·  900 arcsec")
+        self.field_width.setAccessibleName("Square search area side length, arcminutes")
+        self.field_width.setPlaceholderText("5  ·  0.0833 deg  ·  300 arcsec")
         self.field_width.setToolTip(
-            "Full square field width. Default units: arcmin. "
-            "Also accepts 0.25 deg or 900 arcsec.")
+            "Side length of the square search area, centered on RA/Dec. "
+            "Default units: arcmin; also accepts deg or arcsec. "
+            "The outline is shown in the Legacy Viewer.")
 
         for label, field in (
             ("RA · degrees / hh:mm:ss", self.ra),
             ("Dec · degrees / ±dd:mm:ss", self.dec),
-            ("Square field width · arcmin", self.field_width),
+            ("Search area · side length (arcmin)", self.field_width),
         ):
             caption = QLabel(label)
             caption.setBuddy(field)
@@ -569,7 +570,8 @@ class SurveyExplorer(QMainWindow):
             return 'south'
         return None
 
-    def _viewer_link(self, *, field=None, release=None, region=None):
+    def _viewer_link(self, *, field=None, release=None, region=None,
+                     overlay_field=None, mark_target=True):
         selected = [name for name, box in self.release_boxes.items()
                     if box.isChecked()]
         release = release or (selected[0] if selected else 'dr9')
@@ -577,7 +579,8 @@ class SurveyExplorer(QMainWindow):
             region = self._preferred_viewer_region(release)
         return viewer_url(field or self._field(), release=release,
                           region=region, view=self.view_mode.currentData(),
-                          zoom=13)
+                          zoom=13, mark_target=mark_target,
+                          show_field=True, overlay_field=overlay_field)
 
     def show_viewer(self, *_):
         """Navigate Qt directly to the hosted viewer, never as an iframe."""
@@ -585,8 +588,8 @@ class SurveyExplorer(QMainWindow):
             return
         link = self._viewer_link()
         self.message.setText(
-            "Opening official Legacy Survey Viewer; FOV control is separate "
-            "from the brick search area.")
+            "Opening Legacy Viewer with the ICRS search-area outline. "
+            "The colored boundary is a selection preview, not a coverage map.")
         self.sky.load(QUrl(link))
 
     def preview_brick(self, row: int, _column: int):
@@ -600,8 +603,11 @@ class SurveyExplorer(QMainWindow):
         if field_width is None:
             return
         field = SkyField(mid_ra, mid_dec, field_width.width_arcmin)
+        # Brick preview recenters the map but retains the *original*
+        # target-search footprint. Do not move the outline with the brick.
         link = self._viewer_link(
-            field=field, release=hit.release, region=hit.region)
+            field=field, release=hit.release, region=hit.region,
+            overlay_field=field_width, mark_target=False)
         self.sky.load(QUrl(link))
         self.message.setText(
             f"Previewing brick {hit.name} at RA={mid_ra:.5f}, "
