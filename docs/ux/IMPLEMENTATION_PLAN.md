@@ -2,7 +2,7 @@
 
 Parent: `feature/survey-explorer-v04`. Working UI branch:
 `feature/autonomous-ui-system`. v0.3 science PR is independent.
-No GUI visual changes have been implemented at this stage.
+An initial image-first GUI reflow is implemented experimentally in this branch; review against real Windows screenshots and scientific workflows is still required.
 
 ## Product direction
 **LSBpipe Scientific Workbench:** an image-first astronomical desktop
@@ -78,3 +78,24 @@ revising technology.
 new user-journey tests, screenshots from actual running Qt, reviewers'
 evidence against QUALITY_GATES and no blocking scientific regressions.
 A green CI run alone is not visual acceptance.
+
+## Implementation checkpoint — 2026-10-30
+
+Completed for experimental review:
+- Remote preview now occupies the main central pane; a compact scrollable
+  navigation holds target selection and brick evidence.
+- Lower science-data dock holds filters, selected products, HTTP status
+  and coverage diagnostics, with a pinned download/manifest footer.
+- Viewer source is explicitly labeled remote preview, distinct from FITS.
+- The search result opens the dock, and a visible top-level control
+  can hide it without scrolling through the file table.
+- Offline synthetic S0–S3 captures at all three required screen sizes;
+  the harness now rejects silent window expansion and too-small preview.
+- Font capture register-first experiment resolved Segoe UI, Arial and
+  Tahoma in the Windows CI offscreen environment.
+- Existing survey operations, science data types and validation untouched.
+
+Pending: developer visual review of the latest CI screenshots and
+on-device Windows test with live Viewer, FITS data, keyboard navigation,
+high DPI and accessible error recovery. S4–S10 remain future fixtures.
+See `REDESIGN_PROGRESS.md` for exact confirmed vs open findings.
