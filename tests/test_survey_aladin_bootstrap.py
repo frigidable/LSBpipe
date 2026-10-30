@@ -31,7 +31,7 @@ def test_coords_need_explicit_navigation_to_avoid_network_storms():
 
 
 def test_browser_fallback_and_diagnostics():
-    assert "QDesktopServices.openUrl(QUrl(self._viewer_link()))" in (
+    assert "QDesktopServices.openUrl(QUrl(self._viewer_link(include_bricks=True)))" in (
         inspect.getsource(SurveyExplorer.open_viewer_in_browser))
     diag = inspect.getsource(SurveyExplorer.show_viewer_diagnostics)
     assert "JSON.stringify" in diag

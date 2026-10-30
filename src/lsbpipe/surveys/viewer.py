@@ -6,6 +6,7 @@ top-level QtWebEngine page (not iframe) or in the user's browser.
 """
 from __future__ import annotations
 from urllib.parse import urlencode
+import math
 from .legacy import SkyField, regions_for_release
 
 VIEWER_ROOT = "https://www.legacysurvey.org/viewer/"
@@ -36,10 +37,126 @@ def viewer_layer(release: str, region: str | None = None) -> str:
     return _LAYER_MAP[key]
 
 
+
+def field_polygon(field: SkyField, *, subdivisions: int = 4
+                  ) -> tuple[tuple[float, float], ...]:
+    """Closed square search-area boundary on the local ICRS TAN plane.
+
+    The width is the side length of the region in arcminutes, not the
+    screen size. Four equal-length sides in the local tangent plane are
+    sampled as sky positions and returned as (RA deg, Dec deg) vertices.
+    The great-circle connections in the hosted Viewer approximate these
+    curved TAN edges; subdivisions improve that approximation. This is
+    display geometry only, not a new discovery/coverage acceptance rule.
+    """
+    if not isinstance(subdivisions, int) or not 1 <= subdivisions <= 32:
+        raise ValueError("subdivisions must be an integer between 1 and 32")
+    ra = math.radians(field.ra_deg)
+    dec = math.radians(field.dec_deg)
+    center = (math.cos(dec)*math.cos(ra),
+              math.cos(dec)*math.sin(ra), math.sin(dec))
+    east = (-math.sin(ra), math.cos(ra), 0.)
+    north = (-math.sin(dec)*math.cos(ra),
+             -math.sin(dec)*math.sin(ra), math.cos(dec))
+    half = math.tan(math.radians(field.width_arcmin / 120.))
+
+    # Counter-clockwise boundary; every successive coordinate corresponds
+    # to a sample on a projected straight edge, not an RA/Dec rectangle.
+    corners = ((-half, -half), (half, -half),
+               (half, half), (-half, half))
+    coords = []
+    for i, (u0, v0) in enumerate(corners):
+        u1, v1 = corners[(i + 1) % 4]
+        for j in range(subdivisions):
+            t = j / subdivisions
+            u = u0 + (u1-u0)*t
+            v = v0 + (v1-v0)*t
+            x = center[0] + u*east[0] + v*north[0]
+            y = center[1] + u*east[1] + v*north[1]
+            z = center[2] + u*east[2] + v*north[2]
+            sky_ra = math.degrees(math.atan2(y, x)) % 360
+            sky_dec = math.degrees(math.atan2(z, math.hypot(x,y)))
+            coords.append((sky_ra, sky_dec))
+    coords.append(coords[0])  # make the closed outline explicit in poly
+    return tuple(coords)
+
+
+def field_polygon_query(field: SkyField) -> str:
+    """Value of official Legacy Viewer poly= URL parameter (RA,Dec pairs)."""
+    points = field_polygon(field)
+    return ",".join(f"{value:.9f}" for pair in points for value in pair)
+
+
+
+def suggested_zoom(field: SkyField) -> int:
+    """Approximate map framing for the requested width.
+
+    Legacy Viewer zoom depends on the client viewport; this choice is a
+    navigation convenience, NOT a guarantee that the polygon fills a
+    fixed fraction of the on-screen map. The official poly annotation
+    remains authoritative for the selected angular footprint.
+    """
+    return max(0, min(20, round(
+        13 + math.log2(5.0 / field.width_arcmin))))
+
+
+
+
+def brick_outline(hit) -> str:
+    """Viewer poly fragment for the official brick bounding rectangle.
+
+    The archive RA bounds can wrap 0 degrees. These are rectangular
+    catalog bounding boxes, not science pixel masks or exact intersections.
+    """
+    ra1 = float(hit.ra1) % 360.
+    ra2 = float(hit.ra2) % 360.
+    dec1, dec2 = float(hit.dec1), float(hit.dec2)
+    if not (-90 <= dec1 <= dec2 <= 90):
+        raise ValueError("Invalid brick declination bounds")
+    if not all(math.isfinite(v) for v in (ra1,ra2,dec1,dec2)):
+        raise ValueError("Nonfinite brick geometry")
+    if ra2 < ra1:  # keep continuity through RA=0
+        ra2 += 360.
+    ra_mid = (ra1 + ra2) / 2.
+    # Sample edges so projections curve sensibly at higher declinations.
+    pts = []
+    corners = ((ra1,dec1),(ra2,dec1),(ra2,dec2),(ra1,dec2))
+    for i, (a,b) in enumerate(corners):
+        c,d = corners[(i+1)%4]
+        for j in range(4):
+            t = j/4
+            pts.append((a+(c-a)*t, b+(d-b)*t))
+    pts.append(pts[0])
+    return ",".join(f"{ra%360:.9f},{dec:.9f}" for ra,dec in pts)
+
+
+def combined_polygons(field: SkyField, bricks=(), selected=None) -> str:
+    """Official semicolon-delimited multiple-poly URL syntax.
+
+    Deduplicate spatial bricks reused in multiple releases. A selected
+    brick's repeated outline provides visual emphasis without pretending
+    that the hosted map supports an opacity API.
+    """
+    polygons = [field_polygon_query(field)]
+    seen = set()
+    for hit in bricks:
+        key = (hit.region, hit.name)
+        if key not in seen:
+            polygons.append(brick_outline(hit))
+            seen.add(key)
+    if selected is not None:
+        polygons.extend([brick_outline(selected)] * 2)
+    return ";".join(polygons)
+
+
+
 def viewer_url(field: SkyField, *, release: str = "dr9",
                region: str | None = None, zoom: int = 13,
                mark_target: bool = True,
-               view: str = "image") -> str:
+               view: str = "image",
+               show_field: bool = False,
+               overlay_field: SkyField | None = None,
+               bricks=(), selected_brick=None) -> str:
     """Create an exact-coordinate launch URL to the *hosted* Legacy viewer.
 
     Zoom is a Leaflet integer zoom level and is not directly a field width in
@@ -57,4 +174,7 @@ def viewer_url(field: SkyField, *, release: str = "dr9",
             "zoom":str(zoom), "layer":layer}
     if mark_target:
         args["mark"] = f"{field.ra_deg:.7f},{field.dec_deg:.7f}"
+    if show_field:
+        args["poly"] = combined_polygons(
+            overlay_field or field, bricks=bricks, selected=selected_brick)
     return VIEWER_ROOT + "?" + urlencode(args)
