@@ -1,9 +1,6 @@
 name: UI baseline — offline Qt captures
 
 on:
-  push:
-    branches:
-      - feature/autonomous-ui-system
   pull_request:
     paths:
       - "AGENTS.md"

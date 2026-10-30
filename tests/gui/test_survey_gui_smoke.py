@@ -1,12 +1,12 @@
 """Offline Survey Explorer behavior smoke tests; no archive or Viewer I/O."""
 from __future__ import annotations
 
-from scripts.offline_gui_fixture import offline_legacy_viewer
-
 import pytest
 
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+from scripts.offline_gui_fixture import offline_legacy_viewer
 
 from lsbpipe.gui.survey_explorer import SurveyExplorer
 

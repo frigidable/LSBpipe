@@ -36,7 +36,8 @@ P0 / usability:
    important diagnostic states may be lost among transient messages.
 4. Critical scientific distinctions are mostly long paragraphs/tooltips
    rather than contextual, semantically distinct status treatments.
-5. The `SurveyExplorer.width` field shadows `QWidget.width()`; UI tests must use `window.size().width()` until a dedicated refactor can rename it safely.\n6. Network, archive discovery and view navigation are adjacent in
+5. The `SurveyExplorer.width` field shadows `QWidget.width()`; UI tests must use `window.size().width()` until a dedicated refactor can rename it safely.
+6. Network, archive discovery and view navigation are adjacent in
    `SurveyExplorer`, making independent UI state testing harder.
 
 P1 / engineering:
