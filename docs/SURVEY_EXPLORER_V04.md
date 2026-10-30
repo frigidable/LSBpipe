@@ -59,3 +59,34 @@ The manifest does **not** authorize downloads by itself. The `download` command 
 The PR includes deterministic, offline tests for RA=0° geometry, release and band restrictions, correct NERSC path construction, catalog membership, manifest flags, HEAD responses, HTTP 404 and atomic FITS downloads. It also adds a Windows/Linux GitHub Actions matrix and a Windows PySide6 import smoke test. Neither real survey downloads nor GUI rendering are claimed as verified until a successful online Windows run is demonstrated.
 
 References: https://www.legacysurvey.org/dr9/files/ ; https://www.legacysurvey.org/dr10/files/ ; https://www.legacysurvey.org/dr11/files/ ; https://aladin.cds.unistra.fr/AladinLite/doc/
+
+## Aladin Lite fails to initialize (Windows / QtWebEngine)
+
+An empty sky panel and `Loading Aladin Lite JavaScript from CDS…` mean
+the browser has not completed loading the remote script. This **does not**
+implicate DESI catalog discovery, which uses a separate Python HTTPS client.
+
+Choose **Aladin diagnostics**. As of the latest GUI implementation, diagnostics
+return a JSON string through Qt, not a raw JS object (which was previously
+incorrectly reported as a missing bridge). The report includes HTML readiness,
+current script/loader stage, `window.A` and Aladin availability, WebGL2 status,
+Qt page URL and recent JavaScript-console messages.
+
+Use the **Aladin in browser** fallback to distinguish an embedded WebEngine
+problem from general reachability of the CDS web service.
+
+To check HTTPS access through *Python* separately:
+
+```powershell
+python -c "import urllib.request; u='https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'; r=urllib.request.urlopen(u,timeout=12); print(r.status, r.headers.get('Content-Type'), r.read(20))"
+```
+
+If this Python check works but embedded JavaScript remains at
+`script_loading`, investigate Chromium/QtWebEngine proxy settings, firewall,
+certificates and the JavaScript console. If Python also times out, investigate
+network/host access before making additional code changes. The presence of
+WebGL2 does not by itself prove that WASM assets loaded.
+
+Do not disable browser security, TLS certificate verification or Windows
+firewall to work around the error. Full GUI rendering requires a separate
+on-device test; offline Pytest/CI checks cannot certify it.
