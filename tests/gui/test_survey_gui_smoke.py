@@ -408,3 +408,33 @@ def test_brick_preview_preserves_target_overlay(offline_explorer, qtbot):
     params = parse_qs(urlparse(sent.toString()).query)
     assert params["poly"] == [field_polygon_query(target)]
     assert "mark" not in params
+
+
+def test_show_target_marks_5_arcmin_square_and_updates_viewer_heading(
+        offline_explorer):
+    from unittest.mock import patch
+    from urllib.parse import urlparse, parse_qs
+    window = offline_explorer
+    assert window.field_width.value() == pytest.approx(5.)
+    with patch.object(window.sky, 'load') as loader:
+        window.show_viewer()
+    loader.assert_called_once()
+    args = parse_qs(urlparse(loader.call_args.args[0].toString()).query)
+    assert args['zoom'] == ['13']
+    assert 'poly' in args
+    assert '5′ × 5′' in window.preview_label.text()
+    assert 'not calibrated FITS' in window.preview_label.text()
+
+
+def test_field_size_change_affects_search_polygon_and_map_framing(
+        offline_explorer):
+    from urllib.parse import urlparse, parse_qs
+    window = offline_explorer
+    window.field_width.setText('15 arcmin')
+    args = parse_qs(urlparse(window._viewer_link()).query)
+    assert args['zoom'] == ['11']
+    assert len(args['poly'][0].split(',')) == 34
+    window.field_width.setText('1 arcmin')
+    args_small = parse_qs(urlparse(window._viewer_link()).query)
+    assert args_small['zoom'] == ['15']
+    assert args_small['poly'] != args['poly']
