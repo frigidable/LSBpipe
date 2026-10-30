@@ -83,7 +83,7 @@ def test_field_near_edge_is_not_reported_fully_covered():
 
 def test_invalid_radii_and_grids_rejected():
     w, a, iv, nexp, bits = fixture_arrays()
-    with pytest.raises(ValueError, match='Radii'):
+    with pytest.raises(ValueError, match='Require 0'):
         coverage_from_arrays(a, iv, nexp, bits, w, **{
             **args(), 'target_radius_arcsec': 12., 'sky_inner_arcsec': 9.})
     with pytest.raises(ValueError, match='same 2D grid'):
