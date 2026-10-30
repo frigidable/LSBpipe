@@ -4,7 +4,8 @@ import math
 import pytest
 from lsbpipe.surveys.legacy import SkyField
 from lsbpipe.surveys.viewer import (
-    VIEWER_ROOT, viewer_url, viewer_layer, field_polygon, field_polygon_query)
+    VIEWER_ROOT, viewer_url, viewer_layer, field_polygon, field_polygon_query,
+    suggested_zoom)
 
 
 @pytest.mark.parametrize("release,region,expected", [
@@ -136,3 +137,12 @@ def test_preview_recenter_does_not_move_selected_search_outline():
 def test_invalid_polygon_sampling_is_rejected(subdivisions):
     with pytest.raises(ValueError, match='subdivisions'):
         field_polygon(SkyField(40,1,5),subdivisions=subdivisions)
+
+
+@pytest.mark.parametrize("width,zoom", [
+    (0.1, 19), (1, 15), (5, 13), (15, 11), (30, 10), (120, 8)])
+def test_suggested_zoom_frames_field_without_changing_angular_outline(width, zoom):
+    field = SkyField(154.7709,46.4537,width)
+    assert suggested_zoom(field) == zoom
+    assert 'poly' in parse_qs(urlparse(viewer_url(
+        field, show_field=True, zoom=suggested_zoom(field))).query)
