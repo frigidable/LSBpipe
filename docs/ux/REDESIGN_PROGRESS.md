@@ -84,3 +84,38 @@ on-device screenshot may be necessary.
    four-FITS local coverage report on Windows.
 4. Add S4–S10 negative-path fixtures separately; do not create
    fictional download progress or unimplemented cancellation.
+
+## Windows screenshot review — real Legacy Viewer and populated DR9 search
+
+The user provided a full-size screenshot of the actual Windows app at
+the preceding `d32ffc8e` branch revision. The official DR9 preview
+rendered successfully, and the discovery table showed four bricks
+and 44 selected candidate archive files. The bottom science drawer
+and pinned Save/Download footer were visible within the window.
+
+**Usability defect:** only approximately one complete file-table row
+was exposed because multiple permanent filter/QA rows consumed the
+drawer height. The brick table's last column caption was clipped.
+Default selection of 44 products was technically visible and protected
+by confirmation, but full-vs-science-quartet selection needed a
+clearer explicit all-rows reset.
+
+Follow-up changes in this PR:
+- Increase default open drawer from fixed 260px to a screen-relative
+  ~42% of actual window height, bounded to 290–390px, while allowing
+  manual Qt dock resizing.
+- Set a 148px minimum file-table height. Collapse optional coverage QA
+  radius controls behind **Coverage QA settings**, without dropping
+  the actual `Inspect local FITS` operation.
+- Give DR, region and brick headers compact content-driven widths and
+  reserve stretch space for **NEXP g/r/i/z**.
+- Add explicit **Clear all** (including hidden rows), distinct from
+  **Clear visible**. Existing all-files-first and Science quartet
+  download workflows remain available; file-selection behavior
+  does not silently change during filtering.
+- Extend offline Qt smoke tests for all of these controls.
+
+**Status:** code implemented, actual Windows visual sign-off on this
+newer revision pending. The screenshot observation verifies the
+problem in the earlier revision, not its resolution. Scientific
+algorithms and archived FITS data remain unchanged.
