@@ -559,7 +559,7 @@ class SurveyExplorer(QMainWindow):
         return None
 
     def _viewer_link(self, *, field=None, release=None, region=None,
-                     overlay_field=None, mark_target=True):
+                     overlay_field=None, mark_target=True, include_bricks=False):
         selected = [name for name, box in self.release_boxes.items()
                     if box.isChecked()]
         release = release or (selected[0] if selected else 'dr9')
@@ -574,7 +574,8 @@ class SurveyExplorer(QMainWindow):
                           region=region, view=self.view_mode.currentData(),
                           zoom=suggested_zoom(target), mark_target=mark_target,
                           show_field=True, overlay_field=target,
-                          bricks=self.hits, selected_brick=active)
+                          bricks=self.hits if include_bricks else (),
+                          selected_brick=active if include_bricks else None)
 
     def show_viewer(self, *_):
         """Navigate Qt directly to the hosted viewer, never as an iframe."""
@@ -667,7 +668,9 @@ class SurveyExplorer(QMainWindow):
         """Exact ICRS position and release, independent of QtWebEngine networking."""
         if self._validated_field() is None:
             return
-        QDesktopServices.openUrl(QUrl(self._viewer_link()))
+        # External browser cannot receive the live Qt Leaflet overlay.
+        # Include native static poly brick lines there as a fallback.
+        QDesktopServices.openUrl(QUrl(self._viewer_link(include_bricks=True)))
 
     def _viewer_load_started(self):
         self.message.setText("Loading official Legacy Sky Viewer in Qt WebEngine…")
