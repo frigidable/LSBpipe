@@ -360,7 +360,7 @@ class SurveyExplorer(QMainWindow):
         self.navigation_scroll.setWidgetResizable(True)
         self.navigation_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.navigation_scroll.setWidget(left)
-        self.navigation_scroll.setMinimumWidth(290)
+        self.navigation_scroll.setMinimumWidth(275)
         self.navigation_scroll.setMaximumWidth(425)
         preview_container = QWidget()
         preview_layout = QVBoxLayout(preview_container)
@@ -397,16 +397,17 @@ class SurveyExplorer(QMainWindow):
         remains the main area. Users can still resize/hide the inspector.
         """
         width = self.width()
-        desired = max(285, min(415, round(width * 0.215)))
-        if width < 1500:
-            navigation = 290
-        elif width < 1800:
-            navigation = 320
-        else:
-            navigation = 350
-        self.workspace_split.setSizes(
-            [navigation, max(300, width-navigation-desired)])
+        # Fit the inspector FIRST: QMainWindow can otherwise recompute the
+        # splitter using its pre-dock width and leave too little room for sky.
+        desired = max(280, min(395, round(width * 0.195)))
         self.resizeDocks([self.data_drawer], [desired], Qt.Horizontal)
+        if width < 1500:
+            navigation = 278
+        elif width < 1800:
+            navigation = 296
+        else:
+            navigation = 325
+        self.workspace_split.setSizes([navigation, 10000])
 
     def _drawer_visibility_changed(self, visible):
         self.data_toggle.setText(
