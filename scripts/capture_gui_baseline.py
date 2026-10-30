@@ -146,7 +146,14 @@ def main():
         for state in ("S0", "S1", "S2", "S3"):
             window = SurveyExplorer()
             try:
+                # Exercise the populated-state transition AFTER Qt has shown
+                # the window, like a real user search (not before layout).
+                window.show()
+                for _ in range(4):
+                    app.processEvents()
                 apply_offline_state(window, state)
+                for _ in range(4):
+                    app.processEvents()
                 for w, h in SIZES:
                     reports.append(_capture(
                         window, app, outdir, w, h, state))
