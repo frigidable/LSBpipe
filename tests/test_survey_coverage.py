@@ -138,3 +138,13 @@ def test_missing_science_layer_rejected(tmp_path):
         inspect_local_brick(
             tmp_path,release='dr9',region='north',brick='1544p465',
             band='r',**{k:v for k,v in args().items() if k != 'band'})
+
+
+def test_negative_32bit_maskbits_and_8bit_maskbits_fail_closed():
+    w, a, iv, nexp, bits = fixture_arrays()
+    with pytest.raises(ValueError, match='MASKBITS'):
+        coverage_from_arrays(a, iv, nexp, bits.astype(np.uint8), w, **args())
+    negative = bits.astype(np.int32)
+    negative[0,0] = -1
+    with pytest.raises(ValueError, match='Negative signed-32'):
+        coverage_from_arrays(a, iv, nexp, negative, w, **args())
