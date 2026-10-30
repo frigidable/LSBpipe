@@ -65,3 +65,21 @@ def test_visible_filter_is_not_a_global_selection_mutation():
     assert "setRowHidden" in code
     assert "setChecked" not in code
     assert "isRowHidden" in inspect.getsource(SurveyExplorer._set_visible_selection)
+
+
+def test_science_quartet_clears_invisible_selections_and_requires_exact_four():
+    code = inspect.getsource(SurveyExplorer.select_science_quartet)
+    assert '"image"' in code
+    assert '"invvar"' in code
+    assert '"nexp"' in code
+    assert '"maskbits"' in code
+    assert "key in needed" in code
+    assert 'self.files.isRowHidden' not in code
+
+
+def test_local_science_coverage_runs_in_worker():
+    code = inspect.getsource(SurveyExplorer.inspect_coverage)
+    assert "inspect_local_brick" in code
+    assert "save_coverage" in code
+    assert "self._start(job, self._coverage_ready)" in code
+    assert "self.bricks.currentRow()" in code
