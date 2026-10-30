@@ -3,7 +3,7 @@ name: Survey Explorer tests
 on:
   push:
     branches:
-      - feature/survey-explorer-v04
+      - main
   pull_request:
     paths:
       - "src/lsbpipe/surveys/**"
@@ -11,6 +11,10 @@ on:
       - "tests/test_survey_*.py"
       - "pyproject.toml"
       - ".github/workflows/survey-tests.yml"
+
+concurrency:
+  group: survey-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   science-core:
