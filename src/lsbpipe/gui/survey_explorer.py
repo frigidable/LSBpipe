@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -24,57 +26,158 @@ from lsbpipe.surveys.legacy import (
 from lsbpipe.surveys.transfer import probe_product, download_manifest
 
 
-_ALADIN_HTML = """<!DOCTYPE html>
+_ALADIN_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<style>html,body,#aladin-lite-div{margin:0;width:100%;height:100%;background:#101925;}
-#notice{position:absolute;left:12px;top:12px;color:#fff;background:#101925d9;
-font:13px sans-serif;padding:7px;z-index:10;pointer-events:none}</style></head>
-<body><div id="aladin-lite-div"></div><div id="notice">Connecting to Aladin Lite…</div>
-<script src="https://code.jquery.com/jquery-1.12.1.min.js"></script>
-<script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html,body,#aladin-lite-div{margin:0;width:100%;height:100%;background:#101925}
+#notice{position:absolute;left:12px;top:12px;right:12px;color:#fff;
+background:#101925e8;font:13px/1.5 sans-serif;padding:10px;z-index:10;
+pointer-events:none;white-space:pre-wrap}
+</style></head>
+<body><div id="aladin-lite-div"></div>
+<div id="notice">Starting embedded Aladin Lite…</div>
 <script>
-window.lsbMapCentre = function(){return window.lsbAladin ? window.lsbAladin.getRaDec() : null;};
-window.lsbGo = function(ra,dec,fov){
-    // Remember the latest request while Aladin's external JS/WASM initializes.
-    window.lsbPendingGo = [ra,dec,fov];
-    if (!window.lsbAladin) return false;
-    window.lsbAladin.gotoRaDec(ra,dec);
-    window.lsbAladin.setFov(fov);
-    return true;
-};
-window.lsbBricks = function(boxes){
-    window.lsbPendingBricks = boxes;
-    if (!window.lsbAladin) return false;
-    if (window.lsbOverlay && typeof window.lsbOverlay.removeAll === 'function'){
-        window.lsbOverlay.removeAll();
-    } else {
-        window.lsbOverlay = A.graphicOverlay({color:'#51d8ba',lineWidth:2});
-        window.lsbAladin.addOverlay(window.lsbOverlay);
+(function () {
+    "use strict";
+    const notice = document.getElementById('notice');
+    const scriptUrl = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js';
+    window.lsbAladin = null;
+    window.lsbPendingGo = null;
+    window.lsbPendingBricks = [];
+    window.lsbStage = 'boot';
+    window.lsbError = null;
+    function status(stage, message, failure) {
+        window.lsbStage = stage;
+        if (failure) window.lsbError = message;
+        notice.textContent = message;
+        notice.style.display = failure ? 'block' : (stage === 'ready' ? 'none' : 'block');
     }
-    boxes.forEach(b => {
-        // RA=0 crossing requires separate polygons; for now do not plot
-        // a pathological >=180 degree edge in the viewport.
-        if (((b[1]-b[0]+360)%360) < 5) {
-          window.lsbOverlay.addFootprints([A.polygon([
-            [b[0],b[2]], [b[1],b[2]], [b[1],b[3]], [b[0],b[3]]
-          ])]);
+    window.lsbDiagnostics = function () {
+        let webgl2 = false;
+        try { webgl2 = !!document.createElement('canvas').getContext('webgl2'); }
+        catch (_) {}
+        return {stage:window.lsbStage, error:window.lsbError,
+            aladinScriptPresent:typeof window.A !== 'undefined',
+            aladinReady:!!window.lsbAladin, webgl2:webgl2,
+            origin:location.origin, url:scriptUrl};
+    };
+    window.lsbMapCentre = function () {
+        return window.lsbAladin ? window.lsbAladin.getRaDec() : null;
+    };
+    window.lsbGo = function (ra, dec, fov) {
+        window.lsbPendingGo = [ra,dec,fov];
+        if (!window.lsbAladin) return false;
+        window.lsbAladin.gotoRaDec(ra,dec);
+        window.lsbAladin.setFov(fov);
+        return true;
+    };
+    window.lsbBricks = function (boxes) {
+        window.lsbPendingBricks = boxes;
+        if (!window.lsbAladin || typeof window.A === 'undefined') return false;
+        try {
+            if (!window.lsbOverlay) {
+                window.lsbOverlay = A.graphicOverlay({color:'#51d8ba',lineWidth:2});
+                window.lsbAladin.addOverlay(window.lsbOverlay);
+            } else if (typeof window.lsbOverlay.removeAll === 'function') {
+                window.lsbOverlay.removeAll();
+            }
+            boxes.forEach(function(b) {
+                const span = (b[1]-b[0]+360)%360;
+                if (span < 5) {
+                    window.lsbOverlay.addFootprints([A.polygon([
+                        [b[0],b[2]],[b[1],b[2]],[b[1],b[3]],[b[0],b[3]]
+                    ])]);
+                }
+            });
+        } catch (e) {
+            console.warn('LSBpipe brick overlay failed:',e);
+            return false;
+        }
+        return true;
+    };
+    window.addEventListener('error', function (e) {
+        if (window.lsbStage !== 'ready') {
+            status('js_error','Aladin JavaScript error: ' + (e.message||'unknown'),true);
         }
     });
-    return true;
-};
-if (window.A){
-    A.init.then(function(){
-        window.lsbAladin=A.aladin('#aladin-lite-div',
-          {survey:'P/DSS2/color',target:'154.7709 +46.4537',
-           fov:0.5,cooFrame:'ICRSd',showReticle:true});
-        document.getElementById('notice').style.display='none';
-        if (window.lsbPendingGo) window.lsbGo(...window.lsbPendingGo);
-        if (window.lsbPendingBricks) window.lsbBricks(window.lsbPendingBricks);
-    }).catch(e => {document.getElementById('notice').textContent='Aladin error: '+e;});
-} else {
-    document.getElementById('notice').textContent='Aladin script unavailable; check internet access';
-}
+    window.addEventListener('unhandledrejection', function (e) {
+        if (window.lsbStage !== 'ready') {
+            status('init_error','Aladin initialization rejected: ' + String(e.reason),true);
+        }
+    });
+    let webgl2 = false;
+    try {webgl2 = !!document.createElement('canvas').getContext('webgl2');}catch(_){}
+    if (!webgl2) {
+        status('no_webgl2','WebGL2 is unavailable in Qt WebEngine. Check GPU/graphics drivers.',true);
+        return;
+    }
+    status('script_loading','Loading Aladin Lite JavaScript from CDS…',false);
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = scriptUrl;
+    script.onerror = function () {
+        status('script_error','Cannot load Aladin Lite JavaScript from CDS. Check proxy/VPN/network.',true);
+    };
+    script.onload = function () {
+        if (!window.A || !window.A.init || typeof window.A.init.then !== 'function') {
+            status('api_error','Aladin Lite JS loaded without the expected v3 API.',true);
+            return;
+        }
+        status('wasm_loading','Aladin script loaded; initializing WebAssembly/WebGL2…',false);
+        window.A.init.then(function () {
+            try {
+                window.lsbAladin = A.aladin('#aladin-lite-div',{
+                    survey:'P/DSS2/color',target:'154.7709 +46.4537',
+                    fov:0.5,cooFrame:'ICRS',showReticle:true
+                });
+                status('ready','',false);
+                if (window.lsbPendingGo) window.lsbGo.apply(null,window.lsbPendingGo);
+                if (window.lsbPendingBricks) window.lsbBricks(window.lsbPendingBricks);
+            } catch (e) {
+                status('create_error','Aladin viewer creation failed: ' + String(e),true);
+            }
+        }).catch(function(e) {
+            status('wasm_error','Aladin WebAssembly initialization failed: ' + String(e),true);
+        });
+    };
+    document.head.appendChild(script);
+    setTimeout(function () {
+        if (!window.lsbAladin && !window.lsbError) {
+            status('timeout','Aladin still not ready. Open diagnostics to check stage, WebGL2 and network.',true);
+        }
+    }, 18000);
+})();
 </script></body></html>"""
+
+
+class _AladinPageHandler(BaseHTTPRequestHandler):
+    """Serve a fixed embedded HTML page at loopback HTTP origin, never local files."""
+
+    def do_GET(self):
+        if self.path != '/':
+            self.send_error(404)
+            return
+        payload = _ALADIN_HTML.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type','text/html; charset=utf-8')
+        self.send_header('Content-Length',str(len(payload)))
+        self.send_header('Cache-Control','no-store')
+        self.send_header('X-Content-Type-Options','nosniff')
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+def _serve_aladin_page():
+    """Return a loopback-only HTTP server and URL; no public listening interface."""
+    server = ThreadingHTTPServer(('127.0.0.1', 0), _AladinPageHandler)
+    server.daemon_threads = True
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, QUrl(f'http://127.0.0.1:{server.server_address[1]}/')
 
 
 class TaskWorker(QObject):
@@ -148,6 +251,9 @@ class SurveyExplorer(QMainWindow):
         self.center_btn = QPushButton("Use Aladin center")
         self.center_btn.clicked.connect(self.use_map_center)
         actions.addWidget(self.center_btn)
+        self.diagnostic_btn = QPushButton("Aladin diagnostics")
+        self.diagnostic_btn.clicked.connect(self.show_map_diagnostics)
+        actions.addWidget(self.diagnostic_btn)
         form.addRow(actions)
         panel.addWidget(target_box)
 
@@ -191,8 +297,9 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(self.message)
 
         self.sky = QWebEngineView()
+        self._aladin_server, self._aladin_thread, local_url = _serve_aladin_page()
         self.sky.loadFinished.connect(self._on_map_page_loaded)
-        self.sky.setHtml(_ALADIN_HTML, QUrl("https://aladin.cds.unistra.fr/"))
+        self.sky.load(local_url)
         split.addWidget(left)
         split.addWidget(self.sky)
         split.setSizes([650, 810])
@@ -232,6 +339,17 @@ class SurveyExplorer(QMainWindow):
             ": false"
         )
         self.sky.page().runJavaScript(script)
+
+    def show_map_diagnostics(self):
+        """On-demand diagnostics without conflating HTML load and WASM readiness."""
+        def done(values):
+            if not isinstance(values, dict):
+                values = {'status':'JavaScript bridge unavailable'}
+            lines = [f'{key}: {value}' for key, value in values.items()]
+            QMessageBox.information(self, "Aladin Lite diagnostics", "\n".join(lines))
+        self.sky.page().runJavaScript(
+            "typeof window.lsbDiagnostics === 'function' "
+            "? window.lsbDiagnostics() : {status:'HTML bootstrap unavailable'}", done)
 
     def use_map_center(self):
         def done(values):
@@ -431,6 +549,10 @@ class SurveyExplorer(QMainWindow):
                                     "Complete the active operation before closing.")
             event.ignore()
         else:
+            if getattr(self, '_aladin_server', None) is not None:
+                self._aladin_server.shutdown()
+                self._aladin_server.server_close()
+                self._aladin_server = None
             super().closeEvent(event)
 
 
