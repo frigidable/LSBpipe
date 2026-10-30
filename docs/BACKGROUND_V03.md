@@ -45,3 +45,7 @@ This result is engineering verification on synthetic images, **not scientific va
 ## Remaining v0.3 work
 
 P0c will remeasure the same annular/aperture geometry under alternative backgrounds and check `DeltaF = -sum(weights * DeltaB)` at fixed masks. It will not overwrite signed raw flux or impose COG monotonicity. A more complete background QA layer should later include explicitly disjoint sky blocks with separation tests, spatial covariance estimates and injection–recovery experiments.
+
+## Candidate grid provenance (P0c)
+
+The fitted \`BackgroundCandidate\` now retains \`grid_id\`, \`band\` and \`image_shape\` from the fitting scene. Its map renderer rejects a mismatched requested image shape. The \`compare_observation_backgrounds\` adapter rejects fitted candidates whose provenance is absent or differs from the loaded observation and scene. Stand-alone manually supplied background arrays/scalars remain user-responsibility and are not independently authenticated.
