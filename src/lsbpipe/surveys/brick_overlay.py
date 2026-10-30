@@ -111,7 +111,7 @@ _INSTALL = r"""(function(){
     item.on("click", function(e){
       selected=feature.key;
       restyle();
-      if (e && e.originalEvent) L.DomEvent.stopPropagation(e);
+      if (e && e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
     });
   });
   window.__lsbpipeBricks = {
