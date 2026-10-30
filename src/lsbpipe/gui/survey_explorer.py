@@ -88,7 +88,7 @@ class SurveyExplorer(QMainWindow):
         panel.setContentsMargins(10, 10, 10, 10)
         panel.setSpacing(8)
 
-        target_box = QGroupBox("Target & search")
+        target_box = QGroupBox("Target and search")
         form = QFormLayout(target_box)
         self.ra = QDoubleSpinBox()
         self.ra.setDecimals(6)
@@ -151,7 +151,7 @@ class SurveyExplorer(QMainWindow):
         self.web_scale.valueChanged.connect(self._apply_web_scale)
         viewer_controls.addWidget(self.web_scale)
         panel.addLayout(viewer_controls)
-        self.data_toggle = QPushButton("Files & coverage  ▾")
+        self.data_toggle = QPushButton("Files and coverage")
         self.data_toggle.setAccessibleName("Show or hide file selection and coverage")
         self.data_toggle.setToolTip(
             "Open the download and local FITS coverage workbench")
@@ -268,7 +268,7 @@ class SurveyExplorer(QMainWindow):
         self.download_btn = QPushButton("Download selected")
         self.download_btn.clicked.connect(self.download)
         bottom.addWidget(self.download_btn)
-        data_panel.addLayout(bottom)
+        # Footer stays pinned even while product rows scroll.
         self.data_drawer = QDockWidget("Science files · coverage diagnostics", self)
         self.data_drawer.setObjectName("science_data_drawer")
         self.data_drawer.setAllowedAreas(Qt.BottomDockWidgetArea)
@@ -283,7 +283,13 @@ class SurveyExplorer(QMainWindow):
         self.data_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.data_scroll.setMinimumWidth(200)
         self.data_scroll.setWidget(data_container)
-        self.data_drawer.setWidget(self.data_scroll)
+        drawer_body = QWidget()
+        drawer_layout = QVBoxLayout(drawer_body)
+        drawer_layout.setContentsMargins(3, 2, 3, 2)
+        drawer_layout.setSpacing(4)
+        drawer_layout.addWidget(self.data_scroll, 1)
+        drawer_layout.addLayout(bottom, 0)
+        self.data_drawer.setWidget(drawer_body)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.data_drawer)
         self.data_drawer.visibilityChanged.connect(self._drawer_visibility_changed)
         self.data_drawer.hide()
@@ -338,7 +344,7 @@ class SurveyExplorer(QMainWindow):
 
     def _drawer_visibility_changed(self, visible):
         self.data_toggle.setText(
-            "Hide files & coverage  ▴" if visible else "Files & coverage  ▾")
+            "Hide files and coverage" if visible else "Files and coverage")
 
     def _apply_web_scale(self, value):
         """Web UI scaling, independent of world-coordinate zoom."""
