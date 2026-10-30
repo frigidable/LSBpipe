@@ -24,6 +24,7 @@ from lsbpipe.surveys.legacy import (
     SkyField, build_manifest, discover_bricks, save_manifest)
 from lsbpipe.surveys.transfer import probe_product, download_manifest
 from lsbpipe.surveys.viewer import viewer_url
+from lsbpipe.surveys.selection import matching_product, summarize_selection
 
 
 class _DiagnosticWebPage(QWebEnginePage):
@@ -118,6 +119,25 @@ class SurveyExplorer(QMainWindow):
         form.addRow(actions)
         panel.addWidget(target_box)
 
+        viewer_controls = QHBoxLayout()
+        viewer_controls.addWidget(QLabel("Viewer"))
+        self.view_mode = QComboBox()
+        self.view_mode.addItem("Image", "image")
+        self.view_mode.addItem("Tractor model", "model")
+        self.view_mode.addItem("Residual", "resid")
+        self.view_mode.currentIndexChanged.connect(self.show_viewer)
+        viewer_controls.addWidget(self.view_mode, 2)
+        viewer_controls.addWidget(QLabel("Web scale"))
+        self.web_scale = QDoubleSpinBox()
+        self.web_scale.setRange(0.55, 1.30)
+        self.web_scale.setSingleStep(0.05)
+        self.web_scale.setDecimals(2)
+        self.web_scale.setValue(0.80)
+        self.web_scale.setToolTip("Qt page scale; not astronomical map zoom")
+        self.web_scale.valueChanged.connect(self._apply_web_scale)
+        viewer_controls.addWidget(self.web_scale)
+        panel.addLayout(viewer_controls)
+
         self.summary = QLabel("No catalogs queried yet; no coverage claims.")
         self.summary.setWordWrap(True)
         panel.addWidget(self.summary)
@@ -127,6 +147,8 @@ class SurveyExplorer(QMainWindow):
         self.bricks.setMinimumHeight(140)
         panel.addWidget(QLabel("Release-covered intersecting bricks"))
         panel.addWidget(self.bricks, 1)
+        self.bricks.cellDoubleClicked.connect(self.preview_brick)
+        panel.addWidget(QLabel("Double-click a brick to inspect its center in Viewer"))
 
         choices = QHBoxLayout()
         self.profile = QComboBox()
@@ -138,9 +160,43 @@ class SurveyExplorer(QMainWindow):
         self.verify_btn.clicked.connect(self.verify)
         choices.addWidget(self.verify_btn)
         panel.addLayout(choices)
-        self.files = QTableWidget(0, 4)
-        self.files.setHorizontalHeaderLabels(["Use", "File", "Evidence", "Size"])
-        self.files.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        filters = QHBoxLayout()
+        self.brick_filter = QComboBox()
+        self.brick_filter.addItem("All bricks")
+        self.brick_filter.currentIndexChanged.connect(self._filter_products)
+        filters.addWidget(self.brick_filter, 2)
+        self.band_filter = QComboBox()
+        self.band_filter.addItems(["All bands", "g", "r", "i", "z"])
+        self.band_filter.currentIndexChanged.connect(self._filter_products)
+        filters.addWidget(self.band_filter, 1)
+        self.kind_filter = QComboBox()
+        self.kind_filter.addItems(
+            ["All products", "image", "invvar", "maskbits", "nexp",
+             "tractor", "psfsize", "depth", "galdepth", "model"])
+        self.kind_filter.currentIndexChanged.connect(self._filter_products)
+        filters.addWidget(self.kind_filter, 2)
+        panel.addLayout(filters)
+
+        selection_actions = QHBoxLayout()
+        self.select_visible_btn = QPushButton("Select visible")
+        self.select_visible_btn.clicked.connect(lambda: self._set_visible_selection(True))
+        selection_actions.addWidget(self.select_visible_btn)
+        self.clear_visible_btn = QPushButton("Clear visible")
+        self.clear_visible_btn.clicked.connect(lambda: self._set_visible_selection(False))
+        selection_actions.addWidget(self.clear_visible_btn)
+        self.selected_label = QLabel("0 files selected")
+        selection_actions.addWidget(self.selected_label, 2)
+        panel.addLayout(selection_actions)
+
+        self.files = QTableWidget(0, 6)
+        self.files.setHorizontalHeaderLabels(
+            ["Use", "Brick", "Product", "Band", "Evidence", "Size"])
+        self.files.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents)
+        self.files.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.Stretch)
+        self.files.setTextElideMode(Qt.ElideMiddle)
+        self.files.setAlternatingRowColors(True)
         panel.addWidget(self.files, 3)
 
         bottom = QHBoxLayout()
@@ -159,6 +215,7 @@ class SurveyExplorer(QMainWindow):
 
         self.sky = QWebEngineView()
         self.sky.setPage(_DiagnosticWebPage(self.sky))
+        self.sky.setZoomFactor(self.web_scale.value())
         self.sky.loadStarted.connect(self._viewer_load_started)
         self.sky.loadFinished.connect(self._viewer_load_finished)
         split.addWidget(left)
@@ -169,6 +226,10 @@ class SurveyExplorer(QMainWindow):
         # Navigation to a remote web application is deliberately explicit.
         # RA/Dec spinbox edits must not trigger many remote page reloads.
         self.show_viewer()
+
+    def _apply_web_scale(self, value):
+        """Web UI scaling, independent of world-coordinate zoom."""
+        self.sky.setZoomFactor(float(value))
 
     def _field(self):
         return SkyField(self.ra.value(), self.dec.value(), self.width.value())
@@ -184,21 +245,38 @@ class SurveyExplorer(QMainWindow):
             return 'south'
         return None
 
-    def _viewer_link(self):
+    def _viewer_link(self, *, field=None, release=None, region=None):
         selected = [name for name, box in self.release_boxes.items()
                     if box.isChecked()]
-        release = selected[0] if selected else 'dr9'
-        return viewer_url(self._field(), release=release,
-                          region=self._preferred_viewer_region(release),
+        release = release or (selected[0] if selected else 'dr9')
+        if region is None:
+            region = self._preferred_viewer_region(release)
+        return viewer_url(field or self._field(), release=release,
+                          region=region, view=self.view_mode.currentData(),
                           zoom=13)
 
-    def show_viewer(self):
-        """Navigate Qt directly to the official hosted viewer, not an iframe."""
+    def show_viewer(self, *_):
+        """Navigate Qt directly to the hosted viewer, never as an iframe."""
         link = self._viewer_link()
         self.message.setText(
             "Opening official Legacy Survey Viewer; FOV control is separate "
             "from the brick search area.")
         self.sky.load(QUrl(link))
+
+    def preview_brick(self, row: int, _column: int):
+        """Preview a brick center; preserve current catalogue/selection state."""
+        if row < 0 or row >= len(self.hits):
+            return
+        hit = self.hits[row]
+        mid_ra = (hit.ra1 + ((hit.ra2-hit.ra1) % 360.)/2.) % 360.
+        mid_dec = (hit.dec1 + hit.dec2) / 2.
+        field = SkyField(mid_ra, mid_dec, self.width.value())
+        link = self._viewer_link(
+            field=field, release=hit.release, region=hit.region)
+        self.sky.load(QUrl(link))
+        self.message.setText(
+            f"Previewing brick {hit.name} at RA={mid_ra:.5f}, "
+            f"Dec={mid_dec:.5f}; target coordinates unchanged.")
 
     def open_viewer_in_browser(self):
         """Exact ICRS position and release, independent of QtWebEngine networking."""
@@ -317,23 +395,68 @@ class SurveyExplorer(QMainWindow):
             f"{len(hits)} release/region brick intersections; "
             "NEXP values are brick medians, not pixel coverage. "
             "File URLs are unverified until checked.")
+        self._fill_brick_filters()
         self._fill_files()
         self.message.setText(f"{len(manifest['products'])} candidate files")
 
-    def _fill_files(self):
+    def _fill_brick_filters(self):
+        previous = self.brick_filter.currentText()
+        self.brick_filter.blockSignals(True)
+        self.brick_filter.clear()
+        self.brick_filter.addItem("All bricks")
+        for brick in sorted({hit.name for hit in self.hits}):
+            self.brick_filter.addItem(brick)
+        index = self.brick_filter.findText(previous)
+        self.brick_filter.setCurrentIndex(max(0, index))
+        self.brick_filter.blockSignals(False)
+
+    def _fill_files(self, *, checked_paths=None):
+        """Display compact scientific identities; retain selection across profiles."""
         entries = self.manifest["products"] if self.manifest else []
         self.files.setRowCount(len(entries))
         for row, entry in enumerate(entries):
             check = QCheckBox()
-            check.setChecked(True)
+            check.setChecked(
+                checked_paths is None or entry["relative_path"] in checked_paths)
+            check.toggled.connect(self._update_selection_summary)
             holder = QWidget()
             layout = QHBoxLayout(holder)
             layout.setContentsMargins(3, 1, 3, 1)
             layout.addWidget(check, alignment=Qt.AlignCenter)
             self.files.setCellWidget(row, 0, holder)
-            for col, value in ((1, entry["relative_path"]),
-                               (2, entry["evidence"]), (3, "—")):
-                self.files.setItem(row, col, QTableWidgetItem(str(value)))
+            details = (
+                (1, entry["brick"]), (2, entry["kind"]),
+                (3, entry["band"] or "shared"), (4, entry["evidence"]),
+                (5, "—"))
+            for col, value in details:
+                item = QTableWidgetItem(str(value))
+                item.setToolTip(
+                    entry["relative_path"] + chr(10) + entry["url"])
+                self.files.setItem(row, col, item)
+        self._filter_products()
+
+    def _is_visible_product(self, entry):
+        return matching_product(
+            entry,
+            brick=self.brick_filter.currentText(),
+            band=self.band_filter.currentText(),
+            kind=self.kind_filter.currentText())
+
+    def _filter_products(self, *_):
+        if self.manifest is None:
+            return
+        for row, entry in enumerate(self.manifest["products"]):
+            self.files.setRowHidden(row, not self._is_visible_product(entry))
+        self._update_selection_summary()
+
+    def _set_visible_selection(self, checked: bool):
+        if self.manifest is None:
+            return
+        for row in range(self.files.rowCount()):
+            if not self.files.isRowHidden(row):
+                self.files.cellWidget(
+                    row, 0).findChild(QCheckBox).setChecked(checked)
+        self._update_selection_summary()
 
     def _selected(self):
         if not self.manifest:
@@ -344,14 +467,33 @@ class SurveyExplorer(QMainWindow):
             if self.files.cellWidget(row, 0).findChild(QCheckBox).isChecked()
         }
 
+    def _update_selection_summary(self, *_):
+        if not self.manifest:
+            self.selected_label.setText("0 files selected")
+            return
+        selected = self._selected()
+        report = summarize_selection(self.manifest["products"], selected)
+        visible = sum(not self.files.isRowHidden(row)
+                      for row in range(self.files.rowCount()))
+        sizes = (f"≥ {report.known_mib:.1f} MiB known"
+                 if report.unknown_size_files else
+                 f"{report.known_mib:.1f} MiB")
+        self.selected_label.setText(
+            f"{report.selected_files} selected / {visible} shown · "
+            f"{report.verified_files} HTTP OK · {sizes}")
+        self.selected_label.setToolTip(
+            f"{report.unknown_size_files} selected files have unknown sizes; "
+            f"{report.missing_files} known HTTP-missing.")
+
     def _apply_profile(self, _=None):
         if self.manifest is None:
             return
+        previous_selection = self._selected()
         from lsbpipe.surveys.legacy import build_manifest, DEFAULT_PRODUCTS
         kinds = DEFAULT_PRODUCTS if self.profile.currentIndex() == 0 else (
             DEFAULT_PRODUCTS + ("psfsize", "depth", "galdepth", "model"))
         self.manifest = build_manifest(self._field(), self.hits, kinds=kinds)
-        self._fill_files()
+        self._fill_files(checked_paths=previous_selection)
 
     def verify(self):
         if not self.manifest:
@@ -377,10 +519,11 @@ class SurveyExplorer(QMainWindow):
             if r is None:
                 continue
             entry.update(r)
-            self.files.item(row, 2).setText(r["evidence"])
+            self.files.item(row, 4).setText(r["evidence"])
             size = r.get("size_bytes")
-            self.files.item(row, 3).setText(
+            self.files.item(row, 5).setText(
                 f"{size / 1048576:.1f} MiB" if size is not None else "—")
+        self._update_selection_summary()
         self.message.setText(
             f"Verified {len(results)} URL responses; check statuses before download.")
 
@@ -398,6 +541,22 @@ class SurveyExplorer(QMainWindow):
         selected = self._selected()
         if not selected:
             QMessageBox.warning(self, "Nothing selected", "Select at least one product.")
+            return
+        report = summarize_selection(self.manifest["products"], selected)
+        amount = (f"Known size: {report.known_mib:.1f} MiB" +
+                  (f" + {report.unknown_size_files} unknown-sized files."
+                   if report.unknown_size_files else "."))
+        text = (
+            f"Download {report.selected_files} science products?\\n"
+            f"{report.verified_files} HTTP OK, "
+            f"{report.missing_files} confirmed missing, "
+            f"{report.unknown_files} not verified.\\n"
+            f"{amount}\\n\\n"
+            "These are original FITS products and can occupy significant disk space.")
+        if QMessageBox.question(
+                self, "Confirm science download", text,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
             return
         directory = QFileDialog.getExistingDirectory(
             self, "Choose the science data directory", str(Path.home()))
