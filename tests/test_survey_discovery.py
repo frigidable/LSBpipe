@@ -84,3 +84,22 @@ def test_invalid_field_and_brick_cap():
     with pytest.raises(ValueError):
         product_for(BrickHit('dr9', 'north', '../evil', 0, 1, 0, 1, {'g':1}),
                     'image', 'g')
+
+
+def test_related_northern_releases_preserve_independent_download_provenance():
+    hit1 = BrickHit('dr9','north','1544p465',154.4,154.6,46.4,46.6,
+                    {'g':3,'r':3,'z':3})
+    hit2 = BrickHit('dr11','north','1544p465',154.4,154.6,46.4,46.6,
+                    {'g':3,'r':3,'z':3})
+    manifest = build_manifest(SkyField(154.5,46.5),[hit1,hit2],
+                              kinds=('image',),bands=('r',))
+    assert manifest['brick_count'] == 2
+    assert manifest['unique_spatial_bricks'] == 1
+    assert len(manifest['products']) == 2
+    assert {p['release'] for p in manifest['products']} == {'dr9','dr11'}
+    assert manifest['related_release_groups'] == [{
+        'region':'north','brick':'1544p465','releases':['dr11','dr9'],
+        'relation':'SHARED_HISTORICAL_INPUT_OBSERVATIONS_NOT_IDENTICAL_PRODUCTS'
+    }] or (
+        manifest['related_release_groups'][0]['region'] == 'north' and
+        set(manifest['related_release_groups'][0]['releases']) == {'dr9','dr11'})
