@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
-    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QInputDialog,
     QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QHeaderView)
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -199,6 +199,33 @@ class SurveyExplorer(QMainWindow):
         self.files.setAlternatingRowColors(True)
         panel.addWidget(self.files, 3)
 
+        qa_layout = QHBoxLayout()
+        qa_layout.addWidget(QLabel("Coverage QA (arcsec)"))
+        self.target_radius = QDoubleSpinBox()
+        self.target_radius.setRange(1, 1000)
+        self.target_radius.setDecimals(1)
+        self.target_radius.setValue(60.)
+        self.target_radius.setToolTip("Circular object screening region; not a fitted isophote")
+        qa_layout.addWidget(self.target_radius)
+        self.sky_inner = QDoubleSpinBox()
+        self.sky_inner.setRange(1, 1100)
+        self.sky_inner.setDecimals(1)
+        self.sky_inner.setValue(90.)
+        self.sky_inner.setToolTip("Inner radius of diagnostic sky ring")
+        qa_layout.addWidget(self.sky_inner)
+        self.sky_outer = QDoubleSpinBox()
+        self.sky_outer.setRange(1, 1200)
+        self.sky_outer.setDecimals(1)
+        self.sky_outer.setValue(180.)
+        self.sky_outer.setToolTip("Outer radius of diagnostic sky ring")
+        qa_layout.addWidget(self.sky_outer)
+        self.qa_btn = QPushButton("Inspect local FITS")
+        self.qa_btn.setToolTip(
+            "Analyse an already-downloaded brick using IMAGE, INVVAR, NEXP and MASKBITS")
+        self.qa_btn.clicked.connect(self.inspect_coverage)
+        qa_layout.addWidget(self.qa_btn)
+        panel.addLayout(qa_layout)
+
         bottom = QHBoxLayout()
         self.save_btn = QPushButton("Save manifest")
         self.save_btn.clicked.connect(self.save)
@@ -332,6 +359,7 @@ class SurveyExplorer(QMainWindow):
         self.search_btn.setEnabled(False)
         self.download_btn.setEnabled(False)
         self.verify_btn.setEnabled(False)
+        self.qa_btn.setEnabled(False)
         thread = QThread(self)
         worker = TaskWorker(action)
         worker.moveToThread(thread)
@@ -355,6 +383,7 @@ class SurveyExplorer(QMainWindow):
         self.search_btn.setEnabled(True)
         self.download_btn.setEnabled(True)
         self.verify_btn.setEnabled(True)
+        self.qa_btn.setEnabled(True)
 
     def _progress(self, item):
         if isinstance(item, tuple):
@@ -391,10 +420,24 @@ class SurveyExplorer(QMainWindow):
                                for b in ("g", "r", "i", "z"))
             for col, value in enumerate((h.release.upper(), h.region, h.name, medians)):
                 self.bricks.setItem(row, col, QTableWidgetItem(str(value)))
-        self.summary.setText(
-            f"{len(hits)} release/region brick intersections; "
-            "NEXP values are brick medians, not pixel coverage. "
-            "File URLs are unverified until checked.")
+        unique = manifest.get("unique_spatial_bricks", len(hits))
+        related = len(manifest.get("related_release_groups", ()))
+        selected_releases = {
+            name for name, checkbox in self.release_boxes.items()
+            if checkbox.isChecked()}
+        discovered_releases = {hit.release for hit in hits}
+        absent = ", ".join(sorted(selected_releases - discovered_releases))
+        note = (
+            f"{len(hits)} release records across {unique} sky bricks. "
+            f"{related} northern DR9/DR11 input-related groups. "
+            "The reductions are NOT presumed identical. "
+            "NEXP values are brick medians, not pixel coverage.")
+        if absent:
+            note += f" No matching bricks for selected: {absent.upper()}."
+        self.summary.setText(note)
+        self.summary.setToolTip(
+            "Different data releases may reuse exposures but contain distinct "
+            "coadd processing. Do not treat them as independent observations.")
         self._fill_brick_filters()
         self._fill_files()
         self.message.setText(f"{len(manifest['products'])} candidate files")
@@ -572,6 +615,79 @@ class SurveyExplorer(QMainWindow):
                 progress=lambda a,b,c: progress((a,b,c)))
 
         self._start(work, self._receive_download)
+
+    def inspect_coverage(self):
+        """Diagnose a previously downloaded image, IVAR, NEXP and MASKBITS bundle."""
+        if not self.hits:
+            QMessageBox.information(self, "No bricks", "Search a survey field first.")
+            return
+        row = self.bricks.currentRow()
+        if row < 0 or row >= len(self.hits):
+            QMessageBox.information(
+                self, "Select a brick",
+                "Select exactly one brick row above, then inspect its local FITS.")
+            return
+        hit = self.hits[row]
+        bands = hit.bands_with_median_exposure
+        if not bands:
+            QMessageBox.warning(
+                self, "No band in summary",
+                "No positive median NEXP band to inspect for this brick.")
+            return
+        band, accepted = QInputDialog.getItem(
+            self, "Inspect local coverage", "Optical band:", list(bands),
+            0, False)
+        if not accepted:
+            return
+        path = QFileDialog.getExistingDirectory(
+            self, "Select root of downloaded Legacy files", str(Path.home()))
+        if not path:
+            return
+        target, inner, outer = (self.target_radius.value(),
+                                self.sky_inner.value(), self.sky_outer.value())
+        if not (0 < target <= inner < outer <= 1200):
+            QMessageBox.warning(
+                self, "Invalid sky radii",
+                "Require 0 < object radius <= sky-inner < sky-outer <=1200 arcsec")
+            return
+        field = self._field()
+        destination = Path(path) / "coverage-reports" / (
+            f"{hit.release}_{hit.region}_{hit.name}_{band}.json")
+        self.message.setText("Computing source/sky pixel coverage from local FITS…")
+
+        def job(progress):
+            from lsbpipe.surveys.coverage import inspect_local_brick, save_coverage
+            result = inspect_local_brick(
+                Path(path), release=hit.release, region=hit.region,
+                brick=hit.name, band=band,
+                ra_deg=field.ra_deg, dec_deg=field.dec_deg,
+                target_radius_arcsec=target,
+                sky_inner_arcsec=inner, sky_outer_arcsec=outer)
+            save_coverage(result, destination)
+            return result, destination
+
+        self._start(job, self._coverage_ready)
+
+    def _coverage_ready(self, outcome):
+        report, destination = outcome
+        lines = [
+            f"{report.band}-band, status: {report.status}",
+            "Note: local circular screening, NOT a photometry acceptance decision."]
+        for region in report.regions:
+            if region.usable_fraction is None:
+                percent = "no sampled pixels"
+            else:
+                percent = f"{100.*region.usable_fraction:.2f}% usable"
+            lines.append(
+                f"{region.label}: {percent}; "
+                f"field-fraction≈{region.estimated_footprint_fraction:.3f}; "
+                f"NPIX={region.pixel_centers_sampled}")
+        lines.extend(["", "Warnings:"] + list(report.warnings))
+        lines.extend(["", "Saved diagnostic:", str(destination)])
+        self.message.setText(
+            "Coverage report created: " + str(destination))
+        QMessageBox.information(
+            self, "Legacy FITS coverage — diagnostic", chr(10).join(lines))
 
     def _receive_download(self, report):
         successes = sum(x["state"] != "ERROR" for x in report["results"])
