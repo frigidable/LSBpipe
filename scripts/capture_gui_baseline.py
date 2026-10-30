@@ -47,6 +47,11 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
     pixmap = window.grab()
     if pixmap.isNull() or not pixmap.save(str(screenshot), "PNG"):
         raise RuntimeError(f"Unable to capture Qt screenshot: {screenshot}")
+    if (pixmap.width(), pixmap.height()) != (width, height):
+        raise AssertionError(
+            f"Window expanded beyond requested size for {state}: "
+            f"requested {width}x{height}, captured "
+            f"{pixmap.width()}x{pixmap.height()}")
     if screenshot.stat().st_size < 1024:
         raise RuntimeError(f"Screenshot appears truncated: {screenshot}")
 
@@ -62,8 +67,14 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
         "download_button": window.download_btn,
         "web_viewer_placeholder": window.sky,
     }
+    viewer_share = _bounds(splitter.widget(1), window)["width"] / width
+    if viewer_share < 0.55:
+        raise AssertionError(
+            f"{state} viewer insufficient at {width}x{height}: "
+            f"{viewer_share:.1%} (minimum 55%)")
     report = {
         "state": state + "_offline_synthetic",
+        "viewer_width_fraction": round(viewer_share, 4),
         "capture_font_family": QFontInfo(app.font()).family(),
         "font_catalog_families": QFontDatabase.families()[:40],
         "size_requested_logical": [width, height],
@@ -108,12 +119,24 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     app = QApplication.instance() or QApplication([])
-    # Prefer known installed UI fonts, and record which Qt actually resolved.
-    # Offscreen rasterization still requires visual inspection.
+    # The Windows offscreen QPA backend may report an EMPTY font database.
+    # Register system fonts already installed on the CI machine (do not
+    # redistribute fonts). This must precede any widget construction.
+    windows_font_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+    loaded_fonts = []
+    for filename in ("segoeui.ttf", "arial.ttf", "tahoma.ttf"):
+        font_path = windows_font_dir / filename
+        if font_path.is_file():
+            font_id = QFontDatabase.addApplicationFont(str(font_path))
+            if font_id >= 0:
+                loaded_fonts.extend(QFontDatabase.applicationFontFamilies(font_id))
     fonts = set(QFontDatabase.families())
-    preferred = next((name for name in ("Segoe UI", "Arial", "DejaVu Sans")
-                      if name in fonts), app.font().family())
+    preferred = next((name for name in (
+        "Segoe UI", "Arial", "Tahoma", "DejaVu Sans")
+        if name in fonts), app.font().family())
     app.setFont(QFont(preferred, 10))
+    print(f"Qt capture font database: {len(fonts)} families; "
+          f"registered: {loaded_fonts}; selected: {preferred!r}")
     # No Viewer navigation or archive activity from this controlled
     # capture process. The application source itself is NOT modified.
     reports = []
