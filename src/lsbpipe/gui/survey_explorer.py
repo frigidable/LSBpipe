@@ -264,7 +264,16 @@ class SurveyExplorer(QMainWindow):
         self.data_drawer.setAllowedAreas(Qt.BottomDockWidgetArea)
         self.data_drawer.setFeatures(
             QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        self.data_drawer.setWidget(data_container)
+        # A wide file table must scroll within the drawer, never force the
+        # whole top-level application wider than the user's screen.
+        self.data_scroll = QScrollArea()
+        self.data_scroll.setWidgetResizable(True)
+        self.data_scroll.setObjectName("science_data_scroll")
+        self.data_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.data_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.data_scroll.setMinimumWidth(200)
+        self.data_scroll.setWidget(data_container)
+        self.data_drawer.setWidget(self.data_scroll)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.data_drawer)
         self.data_drawer.visibilityChanged.connect(self._drawer_visibility_changed)
         self.data_drawer.hide()
