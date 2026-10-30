@@ -232,3 +232,46 @@ GUI 5′ default, map zoom and brick recenter invariants.
 Current status: changes in Draft PR #4, online Viewer rendering on the
 user's Windows computer pending final visual confirmation. CI checks
 are running.
+
+## Live discovered-brick overlays and simplified survey navigation
+
+After successful Windows visual QA of the 5′ search square, the user
+requested removal of three redundant sidebar items and interactive
+discovered-brick boundaries.
+
+- **Viewer status** button removed from the visible controls. The
+  diagnostic method remains available to developers but is not a
+  user-facing primary workflow.
+- **Web scale** control removed; embedded web UI is held at 0.80, while
+  the astronomical zoom remains controlled by the official map.
+- The long `release records...` summary paragraph was removed from the
+  sidebar. The release/region/brick and median-NEXP columns remain in
+  the brick table. No summary medians are misrepresented as pixel coverage.
+- After `Find data`, the code produces a deterministic set of geometry
+  outlines from actual matched `BrickHit` RA1/RA2/DEC1/DEC2, skipping
+  unsupported geometry and avoiding duplicate outlines for genuinely
+  identical DR9/DR11 footprints. Release identities remain in metadata.
+- The embedded Viewer receives a guarded Leaflet overlay after page
+  load. Blue/cyan thin outlines mark geometric bricks; a hover or
+  click on a map brick adds visible amber translucent fill; selecting
+  an entry in the left brick table also highlights the corresponding
+  boundary **without reloading the page**. Leaving the table clears
+  the transient hover while retaining selection.
+- This interactive API uses the actual upstream
+  `legacysurvey/imagine` `map`, `L`, `ra2long_C`,
+  `dec2lat` globals. It is a private compatibility integration,
+  not a promise of an official stable browser API: it only runs on
+  `https://www.legacysurvey.org/viewer/`. Failure is nonfatal:
+  original target `poly`, sky preview and FITS downloads still work.
+- The embedded page retains **only the 5′ target** in its official
+  native URL polygon: including full brick bounds there would cause
+  upstream Imagine to automatically zoom to the entire collection of
+  bricks, which is undesirable for the target inspection workflow.
+  The separate external-browser fallback may use official static
+  multi-polygon URL annotations instead.
+- This overlay represents **brick rectangles, not the footprint of
+  valid NEXP/IVAR pixels**. Opacity is only a visual selection indicator.
+
+Pure geometry/RA-wrap and defensive script tests, GUI table selection,
+hover behavior and image framing are tracked in CI. Actual browser
+rendering and Leaflet events still require on-device Windows QA.
