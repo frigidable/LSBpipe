@@ -151,6 +151,12 @@ class SurveyExplorer(QMainWindow):
         self.web_scale.valueChanged.connect(self._apply_web_scale)
         viewer_controls.addWidget(self.web_scale)
         panel.addLayout(viewer_controls)
+        self.data_toggle = QPushButton("Files & coverage  ▾")
+        self.data_toggle.setAccessibleName("Show or hide file selection and coverage")
+        self.data_toggle.setToolTip(
+            "Open the download and local FITS coverage workbench")
+        self.data_toggle.clicked.connect(self._toggle_data_drawer)
+        panel.addWidget(self.data_toggle)
 
         self.summary = QLabel("No catalogs queried yet; no coverage claims.")
         self.summary.setWordWrap(True)
@@ -164,11 +170,6 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(self.bricks, 1)
         self.bricks.cellDoubleClicked.connect(self.preview_brick)
         panel.addWidget(QLabel("Double-click a brick to preview its center"))
-        self.data_toggle = QPushButton("Files & coverage  ▾")
-        self.data_toggle.setAccessibleName("Show or hide file selection and coverage")
-        self.data_toggle.setToolTip("Open the download and local FITS coverage workbench")
-        self.data_toggle.clicked.connect(self._toggle_data_drawer)
-        panel.addWidget(self.data_toggle)
         panel.addStretch(1)
 
         # File selection and coverage are a separate, collapsible task surface.
@@ -330,7 +331,10 @@ class SurveyExplorer(QMainWindow):
         self.show_viewer()
 
     def _toggle_data_drawer(self):
-        self.data_drawer.setVisible(not self.data_drawer.isVisible())
+        visible = not self.data_drawer.isVisible()
+        self.data_drawer.setVisible(visible)
+        if visible:
+            self.resizeDocks([self.data_drawer], [260], Qt.Vertical)
 
     def _drawer_visibility_changed(self, visible):
         self.data_toggle.setText(
@@ -523,6 +527,7 @@ class SurveyExplorer(QMainWindow):
         self._fill_brick_filters()
         self._fill_files()
         self.data_drawer.show()
+        self.resizeDocks([self.data_drawer], [260], Qt.Vertical)
         self.message.setText(f"{len(manifest['products'])} candidate files")
 
     def _fill_brick_filters(self):
