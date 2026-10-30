@@ -47,3 +47,18 @@ def test_zoom_validation_and_no_dr10_north_product_claim():
 def test_mark_is_optional_for_clean_view():
     url = viewer_url(SkyField(10, -2), mark_target=False)
     assert "mark=" not in url
+
+@pytest.mark.parametrize("view,suffix", [
+    ("image", "ls-dr9-north"),
+    ("model", "ls-dr9-north-model"),
+    ("resid", "ls-dr9-north-resid"),
+])
+def test_viewer_layer_switching(view, suffix):
+    link = viewer_url(SkyField(154.7709, 46.4537), release="dr9",
+                      region="north", view=view)
+    assert parse_qs(urlparse(link).query)["layer"] == [suffix]
+
+
+def test_viewer_rejects_unknown_preview_mode():
+    with pytest.raises(ValueError, match="view"):
+        viewer_url(SkyField(154.7709, 46.4537), view="dangerous")
