@@ -72,6 +72,13 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
         raise AssertionError(
             f"{state} viewer insufficient at {width}x{height}: "
             f"{viewer_share:.1%} (minimum 55%)")
+    if state != "S0":
+        primary = _bounds(window.download_btn, window)
+        if (not primary["visible"] or primary["y"] < 0 or
+                primary["y"] + primary["height"] > height):
+            raise AssertionError(
+                f"{state} Download selected action is not reachable "
+                f"within the {width}x{height} window: {primary}")
     report = {
         "state": state + "_offline_synthetic",
         "viewer_width_fraction": round(viewer_share, 4),
