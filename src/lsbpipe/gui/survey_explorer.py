@@ -628,11 +628,12 @@ class SurveyExplorer(QMainWindow):
                 "Select exactly one brick row above, then inspect its local FITS.")
             return
         hit = self.hits[row]
-        bands = hit.bands_with_median_exposure
+        # A median NEXP of zero does NOT prove no exposure at this position.
+        # Offer every band described by the release summary for inspection.
+        bands = tuple(hit.median_exposures)
         if not bands:
             QMessageBox.warning(
-                self, "No band in summary",
-                "No positive median NEXP band to inspect for this brick.")
+                self, "No band in summary", "Release summary has no band columns.")
             return
         band, accepted = QInputDialog.getItem(
             self, "Inspect local coverage", "Optical band:", list(bands),
