@@ -1,7 +1,7 @@
-"""PySide6 survey explorer: Aladin sky panel + archive discovery and downloads.
+"""PySide6 survey explorer: official Legacy Sky Viewer and archive downloads.
 
 Requires the optional 'gui' extra, a working QtWebEngine and network access
-for the Aladin script/HiPS tiles and the Legacy archive. No GUI dependency is
+for the hosted Legacy Sky Viewer and the Legacy archive. No GUI dependency is
 imported by the scientific numerical core.
 """
 from __future__ import annotations
@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Callable
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -25,160 +23,7 @@ from PySide6.QtWebEngineCore import QWebEnginePage
 from lsbpipe.surveys.legacy import (
     SkyField, build_manifest, discover_bricks, save_manifest)
 from lsbpipe.surveys.transfer import probe_product, download_manifest
-
-
-_ALADIN_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-html,body,#aladin-lite-div{margin:0;width:100%;height:100%;background:#101925}
-#notice{position:absolute;left:12px;top:12px;right:12px;color:#fff;
-background:#101925e8;font:13px/1.5 sans-serif;padding:10px;z-index:10;
-pointer-events:none;white-space:pre-wrap}
-</style></head>
-<body><div id="aladin-lite-div"></div>
-<div id="notice">Starting embedded Aladin Lite…</div>
-<script>
-(function () {
-    "use strict";
-    const notice = document.getElementById('notice');
-    const scriptUrl = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js';
-    window.lsbAladin = null;
-    window.lsbPendingGo = null;
-    window.lsbPendingBricks = [];
-    window.lsbStage = 'boot';
-    window.lsbError = null;
-    function status(stage, message, failure) {
-        window.lsbStage = stage;
-        if (failure) window.lsbError = message;
-        notice.textContent = message;
-        notice.style.display = failure ? 'block' : (stage === 'ready' ? 'none' : 'block');
-    }
-    window.lsbDiagnostics = function () {
-        let webgl2 = false;
-        try { webgl2 = !!document.createElement('canvas').getContext('webgl2'); }
-        catch (_) {}
-        return {stage:window.lsbStage, error:window.lsbError,
-            aladinScriptPresent:typeof window.A !== 'undefined',
-            aladinReady:!!window.lsbAladin, webgl2:webgl2,
-            origin:location.origin, url:scriptUrl};
-    };
-    window.lsbMapCentre = function () {
-        return window.lsbAladin ? window.lsbAladin.getRaDec() : null;
-    };
-    window.lsbGo = function (ra, dec, fov) {
-        window.lsbPendingGo = [ra,dec,fov];
-        if (!window.lsbAladin) return false;
-        window.lsbAladin.gotoRaDec(ra,dec);
-        window.lsbAladin.setFov(fov);
-        return true;
-    };
-    window.lsbBricks = function (boxes) {
-        window.lsbPendingBricks = boxes;
-        if (!window.lsbAladin || typeof window.A === 'undefined') return false;
-        try {
-            if (!window.lsbOverlay) {
-                window.lsbOverlay = A.graphicOverlay({color:'#51d8ba',lineWidth:2});
-                window.lsbAladin.addOverlay(window.lsbOverlay);
-            } else if (typeof window.lsbOverlay.removeAll === 'function') {
-                window.lsbOverlay.removeAll();
-            }
-            boxes.forEach(function(b) {
-                const span = (b[1]-b[0]+360)%360;
-                if (span < 5) {
-                    window.lsbOverlay.addFootprints([A.polygon([
-                        [b[0],b[2]],[b[1],b[2]],[b[1],b[3]],[b[0],b[3]]
-                    ])]);
-                }
-            });
-        } catch (e) {
-            console.warn('LSBpipe brick overlay failed:',e);
-            return false;
-        }
-        return true;
-    };
-    window.addEventListener('error', function (e) {
-        if (window.lsbStage !== 'ready') {
-            status('js_error','Aladin JavaScript error: ' + (e.message||'unknown'),true);
-        }
-    });
-    window.addEventListener('unhandledrejection', function (e) {
-        if (window.lsbStage !== 'ready') {
-            status('init_error','Aladin initialization rejected: ' + String(e.reason),true);
-        }
-    });
-    let webgl2 = false;
-    try {webgl2 = !!document.createElement('canvas').getContext('webgl2');}catch(_){}
-    if (!webgl2) {
-        status('no_webgl2','WebGL2 is unavailable in Qt WebEngine. Check GPU/graphics drivers.',true);
-        return;
-    }
-    status('script_loading','Loading Aladin Lite JavaScript from CDS…',false);
-    const script = document.createElement('script');
-    script.async = true;
-    script.src = scriptUrl;
-    script.onerror = function () {
-        status('script_error','Cannot load Aladin Lite JavaScript from CDS. Check proxy/VPN/network.',true);
-    };
-    script.onload = function () {
-        if (!window.A || !window.A.init || typeof window.A.init.then !== 'function') {
-            status('api_error','Aladin Lite JS loaded without the expected v3 API.',true);
-            return;
-        }
-        status('wasm_loading','Aladin script loaded; initializing WebAssembly/WebGL2…',false);
-        window.A.init.then(function () {
-            try {
-                window.lsbAladin = A.aladin('#aladin-lite-div',{
-                    survey:'P/DSS2/color',target:'154.7709 +46.4537',
-                    fov:0.5,cooFrame:'ICRS',showReticle:true
-                });
-                status('ready','',false);
-                if (window.lsbPendingGo) window.lsbGo.apply(null,window.lsbPendingGo);
-                if (window.lsbPendingBricks) window.lsbBricks(window.lsbPendingBricks);
-            } catch (e) {
-                status('create_error','Aladin viewer creation failed: ' + String(e),true);
-            }
-        }).catch(function(e) {
-            status('wasm_error','Aladin WebAssembly initialization failed: ' + String(e),true);
-        });
-    };
-    document.head.appendChild(script);
-    setTimeout(function () {
-        if (!window.lsbAladin && !window.lsbError) {
-            status('timeout','Aladin still not ready. Open diagnostics to check stage, WebGL2 and network.',true);
-        }
-    }, 18000);
-})();
-</script></body></html>"""
-
-
-class _AladinPageHandler(BaseHTTPRequestHandler):
-    """Serve a fixed embedded HTML page at loopback HTTP origin, never local files."""
-
-    def do_GET(self):
-        if self.path != '/':
-            self.send_error(404)
-            return
-        payload = _ALADIN_HTML.encode('utf-8')
-        self.send_response(200)
-        self.send_header('Content-Type','text/html; charset=utf-8')
-        self.send_header('Content-Length',str(len(payload)))
-        self.send_header('Cache-Control','no-store')
-        self.send_header('X-Content-Type-Options','nosniff')
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def log_message(self, _format, *_args):
-        pass
-
-
-def _serve_aladin_page():
-    """Return a loopback-only HTTP server and URL; no public listening interface."""
-    server = ThreadingHTTPServer(('127.0.0.1', 0), _AladinPageHandler)
-    server.daemon_threads = True
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server, thread, QUrl(f'http://127.0.0.1:{server.server_address[1]}/')
+from lsbpipe.surveys.viewer import viewer_url
 
 
 class _DiagnosticWebPage(QWebEnginePage):
@@ -218,7 +63,7 @@ class SurveyExplorer(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("LSBpipe — Survey Explorer (experimental)")
+        self.setWindowTitle("LSBpipe — Legacy Survey Explorer (experimental)")
         self.resize(1460, 880)
         self.hits = []
         self.manifest = None
@@ -261,16 +106,14 @@ class SurveyExplorer(QMainWindow):
         self.search_btn = QPushButton("Find Legacy data")
         self.search_btn.clicked.connect(self.search)
         actions.addWidget(self.search_btn)
-        self.center_btn = QPushButton("Use Aladin center")
-        self.center_btn.clicked.connect(self.use_map_center)
+        self.center_btn = QPushButton("Show target in viewer")
+        self.center_btn.clicked.connect(self.show_viewer)
         actions.addWidget(self.center_btn)
-        self.diagnostic_btn = QPushButton("Aladin diagnostics")
-        self.diagnostic_btn.clicked.connect(self.show_map_diagnostics)
+        self.diagnostic_btn = QPushButton("Viewer status")
+        self.diagnostic_btn.clicked.connect(self.show_viewer_diagnostics)
         actions.addWidget(self.diagnostic_btn)
-        self.external_btn = QPushButton("Aladin in browser")
-        self.external_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl("https://aladin.cds.unistra.fr/AladinLite/")))
+        self.external_btn = QPushButton("Open in browser")
+        self.external_btn.clicked.connect(self.open_viewer_in_browser)
         actions.addWidget(self.external_btn)
         form.addRow(actions)
         panel.addWidget(target_box)
@@ -316,116 +159,93 @@ class SurveyExplorer(QMainWindow):
 
         self.sky = QWebEngineView()
         self.sky.setPage(_DiagnosticWebPage(self.sky))
-        self._aladin_server, self._aladin_thread, local_url = _serve_aladin_page()
-        self.sky.loadFinished.connect(self._on_map_page_loaded)
-        self.sky.load(local_url)
+        self.sky.loadStarted.connect(self._viewer_load_started)
+        self.sky.loadFinished.connect(self._viewer_load_finished)
         split.addWidget(left)
         split.addWidget(self.sky)
         split.setSizes([650, 810])
         self.setCentralWidget(split)
-        self.ra.valueChanged.connect(self._goto_aladin)
-        self.dec.valueChanged.connect(self._goto_aladin)
-        self.width.valueChanged.connect(self._goto_aladin)
         self.search_btn.setDefault(True)
-
-    def _on_map_page_loaded(self, success: bool):
-        """HTML loading is async; the Aladin WASM init may finish even later."""
-        if not success:
-            self.message.setText("Aladin HTML load failed; check network/WebEngine.")
-            return
-        # Defers coordinates to the JS bridge, which queues them until A.init.
-        self._goto_aladin()
-        self.sky.page().runJavaScript(
-            "JSON.stringify({bridge: typeof window.lsbGo === 'function',"
-            "stage: window.lsbStage || null,"
-            "notice: document.getElementById('notice')?.textContent || ''})",
-            self._on_map_bridge_checked)
-
-    def _on_map_bridge_checked(self, payload):
-        try:
-            state = json.loads(payload) if isinstance(payload, str) else None
-        except ValueError:
-            state = None
-        if state is None:
-            self.message.setText(
-                "Qt WebEngine did not return JS status; open Aladin diagnostics.")
-        elif not state.get('bridge'):
-            self.message.setText(
-                "Embedded JS bridge absent; open Aladin diagnostics.")
-        # Aladin A.init is asynchronous; a loading stage alone is not failure.
+        # Navigation to a remote web application is deliberately explicit.
+        # RA/Dec spinbox edits must not trigger many remote page reloads.
+        self.show_viewer()
 
     def _field(self):
         return SkyField(self.ra.value(), self.dec.value(), self.width.value())
 
-    def _goto_aladin(self, _=None):
+    def _preferred_viewer_region(self, release: str):
+        """Return a north/south layer only for a field wholly on one side."""
         field = self._field()
-        script = (
-            "typeof window.lsbGo === 'function' ? "
-            f"window.lsbGo({field.ra_deg!r},{field.dec_deg!r},{field.width_arcmin / 60!r}) "
-            ": false"
-        )
-        self.sky.page().runJavaScript(script)
+        half = field.width_arcmin / 120.0
+        boundary = 32.375
+        if field.dec_deg - half > boundary and release in ('dr9', 'dr11'):
+            return 'north'
+        if field.dec_deg + half < boundary:
+            return 'south'
+        return None
 
-    def show_map_diagnostics(self):
-        """Retrieve JSON as a string, preserving visibility when the bridge fails.
+    def _viewer_link(self):
+        selected = [name for name, box in self.release_boxes.items()
+                    if box.isChecked()]
+        release = selected[0] if selected else 'dr9'
+        return viewer_url(self._field(), release=release,
+                          region=self._preferred_viewer_region(release),
+                          zoom=13)
 
-        QWebEngine's result may be null while navigating; this is not proof
-        that the original inline JavaScript failed to execute.
-        """
+    def show_viewer(self):
+        """Navigate Qt directly to the official hosted viewer, not an iframe."""
+        link = self._viewer_link()
+        self.message.setText(
+            "Opening official Legacy Survey Viewer; FOV control is separate "
+            "from the brick search area.")
+        self.sky.load(QUrl(link))
+
+    def open_viewer_in_browser(self):
+        """Exact ICRS position and release, independent of QtWebEngine networking."""
+        QDesktopServices.openUrl(QUrl(self._viewer_link()))
+
+    def _viewer_load_started(self):
+        self.message.setText("Loading official Legacy Sky Viewer in Qt WebEngine…")
+
+    def _viewer_load_finished(self, success: bool):
+        if success:
+            self.message.setText(
+                "Legacy Viewer page loaded. This does not certify that all "
+                "tiles or external scripts have loaded; inspect the image.")
+        else:
+            self.message.setText(
+                "Embedded Legacy Viewer page failed. Use Open in browser "
+                "or Viewer status to check the cause.")
+
+    def show_viewer_diagnostics(self):
+        """Distinguish HTTP document navigation from tile/script rendering."""
         url = self.sky.url().toString()
         console = list(getattr(self.sky.page(), 'recent_console', []))
-        probe = """(function() {
-            try {
-                var element = document.getElementById('notice');
-                return JSON.stringify({
-                    page: location.href,
-                    documentReady: document.readyState,
-                    bridgeType: typeof window.lsbDiagnostics,
-                    stage: window.lsbStage || null,
-                    scriptType: typeof window.A,
-                    viewerReady: !!window.lsbAladin,
-                    onPageNotice: element ? element.textContent : null,
-                    scripts: Array.from(document.scripts).map(
-                        function(s) {return s.src || '[inline]';}).slice(-8),
-                    webgl2: (function() {
-                        try {return !!document.createElement('canvas').getContext('webgl2');}
-                        catch(e) {return String(e);}
-                    })()
-                });
-            } catch(e) {
-                return JSON.stringify({javascriptException:String(e)});
-            }
+        probe = """(function(){
+            try{return JSON.stringify({
+                page:location.href,
+                documentReady:document.readyState,
+                title:document.title,
+                imageCount:document.images.length,
+                tileImages:Array.from(document.images).filter(
+                    function(i){return i.naturalWidth>0;}).length,
+                scripts:document.scripts.length
+            });} catch(e){return JSON.stringify({error:String(e)});}
         })()"""
         def done(payload):
             lines = [f"Qt WebEngine URL: {url}"]
             if isinstance(payload, str):
                 try:
-                    details = json.loads(payload)
-                    lines += [f"{key}: {value}" for key, value in details.items()]
-                except (ValueError, TypeError):
-                    lines.append(f"JavaScript returned non-JSON string: {payload[:400]}")
+                    data = json.loads(payload)
+                    lines += [f"{k}: {v}" for k, v in data.items()]
+                except ValueError:
+                    lines.append("Malformed JS status: "+payload[:300])
             else:
-                lines.append(f"JavaScript returned {type(payload).__name__}: {payload!r}")
-                lines.append("This result may occur during navigation or a stalled renderer.")
-            if console:
-                lines.append("")
-                lines.append("Recent JavaScript console entries:")
-                lines.extend(console[-10:])
-            else:
-                lines.append("JavaScript console: no messages captured")
-            QMessageBox.information(self, "Aladin Lite diagnostics", chr(10).join(lines))
+                lines.append("No JavaScript response (possibly page navigation).")
+            lines.append("Recent JS console:")
+            lines.extend(console[-12:] or ["No console messages captured"])
+            QMessageBox.information(self, "Legacy Viewer status", chr(10).join(lines))
         self.sky.page().runJavaScript(probe, done)
-
-    def use_map_center(self):
-        def done(values):
-            if isinstance(values, list) and len(values) == 2:
-                ra, dec = values
-                if isinstance(ra, (int, float)) and isinstance(dec, (int, float)):
-                    self.ra.setValue(ra % 360)
-                    self.dec.setValue(dec)
-        self.sky.page().runJavaScript(
-            "typeof window.lsbMapCentre === 'function' ? "
-            "window.lsbMapCentre() : null", done)
 
     def _start(self, action, finished):
         if self.thread is not None:
@@ -475,7 +295,7 @@ class SurveyExplorer(QMainWindow):
         self.bricks.setRowCount(0)
         self.files.setRowCount(0)
         self.message.setText("Loading survey geometry and footprint catalogs…")
-        self._goto_aladin()
+        self.show_viewer()
 
         def work(progress):
             hits = discover_bricks(field, releases)
@@ -498,10 +318,6 @@ class SurveyExplorer(QMainWindow):
             "NEXP values are brick medians, not pixel coverage. "
             "File URLs are unverified until checked.")
         self._fill_files()
-        boxes = [[h.ra1, h.ra2, h.dec1, h.dec2] for h in hits]
-        self.sky.page().runJavaScript(
-            "typeof window.lsbBricks === 'function' ? "
-            "window.lsbBricks(" + json.dumps(boxes) + ") : false")
         self.message.setText(f"{len(manifest['products'])} candidate files")
 
     def _fill_files(self):
@@ -614,10 +430,6 @@ class SurveyExplorer(QMainWindow):
                                     "Complete the active operation before closing.")
             event.ignore()
         else:
-            if getattr(self, '_aladin_server', None) is not None:
-                self._aladin_server.shutdown()
-                self._aladin_server.server_close()
-                self._aladin_server = None
             super().closeEvent(event)
 
 
