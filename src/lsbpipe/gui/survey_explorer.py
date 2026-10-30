@@ -406,7 +406,7 @@ class SurveyExplorer(QMainWindow):
                 lines.extend(console[-10:])
             else:
                 lines.append("JavaScript console: no messages captured")
-            QMessageBox.information(self, "Aladin Lite diagnostics", "\\n".join(lines))
+            QMessageBox.information(self, "Aladin Lite diagnostics", chr(10).join(lines))
         self.sky.page().runJavaScript(probe, done)
 
     def use_map_center(self):
