@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QInputDialog,
     QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget, QHeaderView)
+    QVBoxLayout, QWidget, QHeaderView, QDockWidget, QScrollArea, QSizePolicy)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 
@@ -75,7 +75,11 @@ class SurveyExplorer(QMainWindow):
     def _build_ui(self):
         split = QSplitter(Qt.Horizontal, self)
         left = QWidget()
+        left.setObjectName("survey_navigation")
+        left.setMinimumWidth(270)
         panel = QVBoxLayout(left)
+        panel.setContentsMargins(10, 10, 10, 10)
+        panel.setSpacing(8)
 
         target_box = QGroupBox("Target & search")
         form = QFormLayout(target_box)
@@ -87,14 +91,14 @@ class SurveyExplorer(QMainWindow):
         self.dec.setDecimals(6)
         self.dec.setRange(-90, 90)
         self.dec.setValue(46.4537)
-        self.width = QDoubleSpinBox()
-        self.width.setRange(0.1, 120.0)
-        self.width.setDecimals(1)
-        self.width.setValue(15.0)
-        self.width.setSuffix(" arcmin")
+        self.field_width = QDoubleSpinBox()
+        self.field_width.setRange(0.1, 120.0)
+        self.field_width.setDecimals(1)
+        self.field_width.setValue(15.0)
+        self.field_width.setSuffix(" arcmin")
         form.addRow("RA (ICRS, deg)", self.ra)
         form.addRow("Dec (ICRS, deg)", self.dec)
-        form.addRow("Square field width", self.width)
+        form.addRow("Square field width", self.field_width)
         releases = QHBoxLayout()
         self.release_boxes = {}
         for dr in ("dr9", "dr10", "dr11"):
@@ -104,19 +108,22 @@ class SurveyExplorer(QMainWindow):
             releases.addWidget(check)
         form.addRow("Releases", releases)
         actions = QHBoxLayout()
-        self.search_btn = QPushButton("Find Legacy data")
+        self.search_btn = QPushButton("Find data")
+        self.search_btn.setToolTip("Discover Legacy archive bricks for this ICRS field")
         self.search_btn.clicked.connect(self.search)
         actions.addWidget(self.search_btn)
-        self.center_btn = QPushButton("Show target in viewer")
+        self.center_btn = QPushButton("Show target")
         self.center_btn.clicked.connect(self.show_viewer)
         actions.addWidget(self.center_btn)
+        form.addRow(actions)
+        secondary_actions = QHBoxLayout()
         self.diagnostic_btn = QPushButton("Viewer status")
         self.diagnostic_btn.clicked.connect(self.show_viewer_diagnostics)
-        actions.addWidget(self.diagnostic_btn)
+        secondary_actions.addWidget(self.diagnostic_btn)
         self.external_btn = QPushButton("Open in browser")
         self.external_btn.clicked.connect(self.open_viewer_in_browser)
-        actions.addWidget(self.external_btn)
-        form.addRow(actions)
+        secondary_actions.addWidget(self.external_btn)
+        form.addRow(secondary_actions)
         panel.addWidget(target_box)
 
         viewer_controls = QHBoxLayout()
@@ -142,13 +149,26 @@ class SurveyExplorer(QMainWindow):
         self.summary.setWordWrap(True)
         panel.addWidget(self.summary)
         self.bricks = QTableWidget(0, 4)
-        self.bricks.setHorizontalHeaderLabels(["Release", "Region", "Brick", "Median NEXP g/r/i/z"])
+        self.bricks.setHorizontalHeaderLabels(["DR", "Region", "Brick", "Median NEXP g/r/i/z"])
         self.bricks.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.bricks.setMinimumHeight(140)
         panel.addWidget(QLabel("Release-covered intersecting bricks"))
         panel.addWidget(self.bricks, 1)
         self.bricks.cellDoubleClicked.connect(self.preview_brick)
-        panel.addWidget(QLabel("Double-click a brick to inspect its center in Viewer"))
+        panel.addWidget(QLabel("Double-click a brick to preview its center"))
+        self.data_toggle = QPushButton("Files & coverage  ▾")
+        self.data_toggle.setAccessibleName("Show or hide file selection and coverage")
+        self.data_toggle.setToolTip("Open the download and local FITS coverage workbench")
+        self.data_toggle.clicked.connect(self._toggle_data_drawer)
+        panel.addWidget(self.data_toggle)
+        panel.addStretch(1)
+
+        # File selection and coverage are a separate, collapsible task surface.
+        # They no longer set a 900+ px minimum width on the survey navigation.
+        data_container = QWidget()
+        data_panel = QVBoxLayout(data_container)
+        data_panel.setContentsMargins(10, 8, 10, 8)
+        data_panel.setSpacing(6)
 
         choices = QHBoxLayout()
         self.profile = QComboBox()
@@ -159,7 +179,7 @@ class SurveyExplorer(QMainWindow):
         self.verify_btn = QPushButton("Check selected files")
         self.verify_btn.clicked.connect(self.verify)
         choices.addWidget(self.verify_btn)
-        panel.addLayout(choices)
+        data_panel.addLayout(choices)
         filters = QHBoxLayout()
         self.brick_filter = QComboBox()
         self.brick_filter.addItem("All bricks")
@@ -175,7 +195,7 @@ class SurveyExplorer(QMainWindow):
              "tractor", "psfsize", "depth", "galdepth", "model"])
         self.kind_filter.currentIndexChanged.connect(self._filter_products)
         filters.addWidget(self.kind_filter, 2)
-        panel.addLayout(filters)
+        data_panel.addLayout(filters)
 
         selection_actions = QHBoxLayout()
         self.select_visible_btn = QPushButton("Select visible")
@@ -191,7 +211,7 @@ class SurveyExplorer(QMainWindow):
         selection_actions.addWidget(self.science_btn)
         self.selected_label = QLabel("0 files selected")
         selection_actions.addWidget(self.selected_label, 2)
-        panel.addLayout(selection_actions)
+        data_panel.addLayout(selection_actions)
 
         self.files = QTableWidget(0, 6)
         self.files.setHorizontalHeaderLabels(
@@ -202,7 +222,7 @@ class SurveyExplorer(QMainWindow):
             2, QHeaderView.Stretch)
         self.files.setTextElideMode(Qt.ElideMiddle)
         self.files.setAlternatingRowColors(True)
-        panel.addWidget(self.files, 3)
+        data_panel.addWidget(self.files, 3)
 
         qa_layout = QHBoxLayout()
         qa_layout.addWidget(QLabel("Coverage QA (arcsec)"))
@@ -229,7 +249,7 @@ class SurveyExplorer(QMainWindow):
             "Analyse an already-downloaded brick using IMAGE, INVVAR, NEXP and MASKBITS")
         self.qa_btn.clicked.connect(self.inspect_coverage)
         qa_layout.addWidget(self.qa_btn)
-        panel.addLayout(qa_layout)
+        data_panel.addLayout(qa_layout)
 
         bottom = QHBoxLayout()
         self.save_btn = QPushButton("Save manifest")
@@ -238,33 +258,61 @@ class SurveyExplorer(QMainWindow):
         self.download_btn = QPushButton("Download selected")
         self.download_btn.clicked.connect(self.download)
         bottom.addWidget(self.download_btn)
-        panel.addLayout(bottom)
+        data_panel.addLayout(bottom)
+        self.data_drawer = QDockWidget("Science files · coverage diagnostics", self)
+        self.data_drawer.setObjectName("science_data_drawer")
+        self.data_drawer.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self.data_drawer.setFeatures(
+            QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
+        self.data_drawer.setWidget(data_container)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.data_drawer)
+        self.data_drawer.visibilityChanged.connect(self._drawer_visibility_changed)
+        self.data_drawer.hide()
+
+        # Progress remains visible even when the data drawer is closed.
         self.bar = QProgressBar()
         self.bar.setValue(0)
-        panel.addWidget(self.bar)
+        data_panel.addWidget(self.bar)
         self.message = QLabel("Ready")
-        panel.addWidget(self.message)
+        data_panel.addWidget(self.message)
 
         self.sky = QWebEngineView()
         self.sky.setPage(_DiagnosticWebPage(self.sky))
         self.sky.setZoomFactor(self.web_scale.value())
         self.sky.loadStarted.connect(self._viewer_load_started)
         self.sky.loadFinished.connect(self._viewer_load_finished)
-        split.addWidget(left)
+        self.navigation_scroll = QScrollArea()
+        self.navigation_scroll.setObjectName("survey_scroll")
+        self.navigation_scroll.setWidgetResizable(True)
+        self.navigation_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.navigation_scroll.setWidget(left)
+        self.navigation_scroll.setMinimumWidth(290)
+        self.navigation_scroll.setMaximumWidth(425)
+        split.addWidget(self.navigation_scroll)
         split.addWidget(self.sky)
-        split.setSizes([650, 810])
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setChildrenCollapsible(False)
+        split.setSizes([375, 1085])
         self.setCentralWidget(split)
         self.search_btn.setDefault(True)
         # Navigation to a remote web application is deliberately explicit.
         # RA/Dec spinbox edits must not trigger many remote page reloads.
         self.show_viewer()
 
+    def _toggle_data_drawer(self):
+        self.data_drawer.setVisible(not self.data_drawer.isVisible())
+
+    def _drawer_visibility_changed(self, visible):
+        self.data_toggle.setText(
+            "Hide files & coverage  ▴" if visible else "Files & coverage  ▾")
+
     def _apply_web_scale(self, value):
         """Web UI scaling, independent of world-coordinate zoom."""
         self.sky.setZoomFactor(float(value))
 
     def _field(self):
-        return SkyField(self.ra.value(), self.dec.value(), self.width.value())
+        return SkyField(self.ra.value(), self.dec.value(), self.field_width.value())
 
     def _preferred_viewer_region(self, release: str):
         """Return a north/south layer only for a field wholly on one side."""
@@ -302,7 +350,7 @@ class SurveyExplorer(QMainWindow):
         hit = self.hits[row]
         mid_ra = (hit.ra1 + ((hit.ra2-hit.ra1) % 360.)/2.) % 360.
         mid_dec = (hit.dec1 + hit.dec2) / 2.
-        field = SkyField(mid_ra, mid_dec, self.width.value())
+        field = SkyField(mid_ra, mid_dec, self.field_width.value())
         link = self._viewer_link(
             field=field, release=hit.release, region=hit.region)
         self.sky.load(QUrl(link))
@@ -445,6 +493,7 @@ class SurveyExplorer(QMainWindow):
             "coadd processing. Do not treat them as independent observations.")
         self._fill_brick_filters()
         self._fill_files()
+        self.data_drawer.show()
         self.message.setText(f"{len(manifest['products'])} candidate files")
 
     def _fill_brick_filters(self):
