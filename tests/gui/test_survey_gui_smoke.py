@@ -114,8 +114,17 @@ def test_data_workbench_is_progressive_and_essential_actions_remain_reachable(
     qtbot.wait(20)
     assert window.data_drawer.isVisible()
     assert window.files.isVisible()
+    assert window.files.minimumHeight() >= 148
+    assert window.qa_toggle.isVisible()
+    assert not window.qa_widget.isVisible()
+    window.qa_toggle.click()
+    qtbot.wait(20)
+    assert window.qa_widget.isVisible()
     assert window.qa_btn.isVisible()
     assert window.download_btn.isVisible()
+    window.qa_toggle.click()
+    qtbot.wait(20)
+    assert not window.qa_widget.isVisible()
     window.data_toggle.click()
     qtbot.wait(20)
     assert not window.data_drawer.isVisible()
@@ -155,3 +164,36 @@ def test_navigation_scroll_keeps_dense_controls_accessible(offline_explorer, qtb
     assert window.navigation_scroll.verticalScrollBar() is not None
     assert window.search_btn.isVisible()
     assert window.data_toggle.isVisible()
+
+
+def test_selection_can_explicitly_clear_hidden_and_visible_products(offline_explorer):
+    window = offline_explorer
+    apply_offline_state(window, "S1")
+    assert len(window._selected()) == 88
+    window.band_filter.setCurrentText("r")
+    window.kind_filter.setCurrentText("image")
+    assert sum(window.files.isRowHidden(i)
+               for i in range(window.files.rowCount())) > 0
+    window.clear_all_btn.click()
+    assert window._selected() == set()
+    assert "0 selected" in window.selected_label.text()
+    # The dedicated science preset then selects exactly four paths from
+    # one chosen release/brick, regardless of active table filters.
+    window.bricks.selectRow(0)
+    from unittest.mock import patch
+    from lsbpipe.gui import survey_explorer as gui
+    with patch.object(gui.QInputDialog, "getItem", return_value=("r", True)):
+        window.select_science_quartet()
+    assert len(window._selected()) == 4
+
+
+def test_nexp_column_is_prioritized_and_qa_starts_collapsed(offline_explorer):
+    from PySide6.QtWidgets import QHeaderView
+    window = offline_explorer
+    header = window.bricks.horizontalHeader()
+    for column in (0, 1, 2):
+        assert header.sectionResizeMode(column) == QHeaderView.ResizeToContents
+    assert header.sectionResizeMode(3) == QHeaderView.Stretch
+    assert window.bricks.horizontalHeaderItem(3).text() == "NEXP g/r/i/z"
+    assert not window.qa_widget.isVisible()
+    assert window.files.minimumHeight() >= 148
