@@ -336,16 +336,23 @@ class SurveyExplorer(QMainWindow):
         # Defers coordinates to the JS bridge, which queues them until A.init.
         self._goto_aladin()
         self.sky.page().runJavaScript(
-            "({bridge: typeof window.lsbGo === 'function',"
-            "aladin: !!window.lsbAladin,"
+            "JSON.stringify({bridge: typeof window.lsbGo === 'function',"
+            "stage: window.lsbStage || null,"
             "notice: document.getElementById('notice')?.textContent || ''})",
             self._on_map_bridge_checked)
 
-    def _on_map_bridge_checked(self, state):
-        if not isinstance(state, dict) or not state.get('bridge'):
+    def _on_map_bridge_checked(self, payload):
+        try:
+            state = json.loads(payload) if isinstance(payload, str) else None
+        except ValueError:
+            state = None
+        if state is None:
             self.message.setText(
-                "Aladin bridge missing: inspect WebEngine/network access.")
-        # A.init may still be loading; the on-map notice reports script errors.
+                "Qt WebEngine did not return JS status; open Aladin diagnostics.")
+        elif not state.get('bridge'):
+            self.message.setText(
+                "Embedded JS bridge absent; open Aladin diagnostics.")
+        # Aladin A.init is asynchronous; a loading stage alone is not failure.
 
     def _field(self):
         return SkyField(self.ra.value(), self.dec.value(), self.width.value())
