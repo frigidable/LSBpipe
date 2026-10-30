@@ -23,7 +23,7 @@ from PySide6.QtWebEngineCore import QWebEnginePage
 from lsbpipe.surveys.legacy import (
     SkyField, build_manifest, discover_bricks, save_manifest)
 from lsbpipe.surveys.transfer import probe_product, download_manifest
-from lsbpipe.surveys.viewer import viewer_url
+from lsbpipe.surveys.viewer import viewer_url, suggested_zoom
 from lsbpipe.surveys.selection import matching_product, summarize_selection
 from lsbpipe.gui.target_input import (
     parse_ra_deg, parse_dec_deg, parse_width_arcmin, parse_coordinate_pair)
@@ -577,15 +577,21 @@ class SurveyExplorer(QMainWindow):
         release = release or (selected[0] if selected else 'dr9')
         if region is None:
             region = self._preferred_viewer_region(release)
+        target = overlay_field or self._field()
         return viewer_url(field or self._field(), release=release,
                           region=region, view=self.view_mode.currentData(),
-                          zoom=13, mark_target=mark_target,
-                          show_field=True, overlay_field=overlay_field)
+                          zoom=suggested_zoom(target), mark_target=mark_target,
+                          show_field=True, overlay_field=target)
 
     def show_viewer(self, *_):
         """Navigate Qt directly to the hosted viewer, never as an iframe."""
-        if self._validated_field() is None:
+        field = self._validated_field()
+        if field is None:
             return
+        self.preview_label.setText(
+            "REMOTE PREVIEW · Legacy Viewer · "
+            f"search area {field.width_arcmin:g}′ × {field.width_arcmin:g}′ "
+            "· not calibrated FITS")
         link = self._viewer_link()
         self.message.setText(
             "Opening Legacy Viewer with the ICRS search-area outline. "
