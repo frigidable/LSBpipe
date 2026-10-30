@@ -272,9 +272,10 @@ class SurveyExplorer(QMainWindow):
         # Progress remains visible even when the data drawer is closed.
         self.bar = QProgressBar()
         self.bar.setValue(0)
-        data_panel.addWidget(self.bar)
+        panel.addWidget(self.bar)
         self.message = QLabel("Ready")
-        data_panel.addWidget(self.message)
+        self.message.setWordWrap(True)
+        panel.addWidget(self.message)
 
         self.sky = QWebEngineView()
         self.sky.setPage(_DiagnosticWebPage(self.sky))
