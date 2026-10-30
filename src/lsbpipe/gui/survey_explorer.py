@@ -574,8 +574,10 @@ class SurveyExplorer(QMainWindow):
                           region=region, view=self.view_mode.currentData(),
                           zoom=suggested_zoom(target), mark_target=mark_target,
                           show_field=True, overlay_field=target,
-                          bricks=self.hits if include_bricks else (),
-                          selected_brick=active if include_bricks else None)
+                          bricks=(self.hits if include_bricks and
+                                  self._brick_result_matches_target() else ()),
+                          selected_brick=(active if include_bricks and
+                                  self._brick_result_matches_target() else None))
 
     def show_viewer(self, *_):
         """Navigate Qt directly to the hosted viewer, never as an iframe."""
@@ -592,9 +594,26 @@ class SurveyExplorer(QMainWindow):
             "The colored boundary is a selection preview, not a coverage map.")
         self.sky.load(QUrl(link))
 
+    def _brick_result_matches_target(self):
+        """Never draw prior search bricks around edited target coordinates."""
+        if not self.manifest:
+            return False
+        try:
+            field = self._field()
+        except ValueError:
+            return False
+        saved = self.manifest.get("field", {})
+        return all(abs(actual - float(saved.get(name, float("nan")))) < 1e-9
+                   for name, actual in (
+                       ("ra_deg", field.ra_deg),
+                       ("dec_deg", field.dec_deg),
+                       ("width_arcmin", field.width_arcmin)))
+
     def _run_brick_js(self, script, callback=None):
         """Fail closed on unexpected external navigations or missing JS API."""
-        if not self._brick_overlay_features or not hasattr(self.sky, "page"):
+        if (not self._brick_overlay_features or
+                not self._brick_result_matches_target() or
+                not hasattr(self.sky, "page")):
             return
         url = self.sky.url()
         if not (url.scheme() == "https" and
@@ -610,7 +629,7 @@ class SurveyExplorer(QMainWindow):
             page.runJavaScript(script, callback)
 
     def _install_bricks(self, attempt=0):
-        if not self._brick_overlay_features:
+        if not self._brick_overlay_features or not self._brick_result_matches_target():
             return
         self._run_brick_js(
             installation_script(self._brick_overlay_features),
