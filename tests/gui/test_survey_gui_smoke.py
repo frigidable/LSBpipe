@@ -503,3 +503,18 @@ def test_leaflet_script_refuses_untrusted_web_navigation(offline_explorer):
         with patch.object(page, "page", create=True) as p:
             window._run_brick_js("alert('must not run')")
             p.assert_not_called()
+
+
+def test_brick_geometry_does_not_follow_edited_target_as_stale_coverage(offline_explorer):
+    from urllib.parse import urlparse, parse_qs
+    w = offline_explorer
+    apply_offline_state(w, "S1")
+    assert w._brick_result_matches_target()
+    assert len(parse_qs(urlparse(
+        w._viewer_link(include_bricks=True)).query)["poly"][0].split(";")) == 5
+    w.ra.setText("40.096208")
+    assert not w._brick_result_matches_target()
+    # Only the newly requested target area remains on map; previous
+    # unrelated archive brick polygons must not claim to cover it.
+    assert len(parse_qs(urlparse(
+        w._viewer_link(include_bricks=True)).query)["poly"][0].split(";")) == 1
