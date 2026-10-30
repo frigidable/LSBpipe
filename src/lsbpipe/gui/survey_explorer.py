@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl, QTimer
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl, QTimer, QEvent
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QLineEdit,
@@ -262,6 +262,7 @@ class SurveyExplorer(QMainWindow):
         self.bricks.cellDoubleClicked.connect(self.preview_brick)
         self.bricks.itemSelectionChanged.connect(self._selected_brick_changed)
         self.bricks.setMouseTracking(True)
+        self.bricks.viewport().installEventFilter(self)
         self.bricks.cellEntered.connect(self._hover_brick_row)
         panel.addWidget(QLabel("Double-click a brick to preview its center"))
         panel.addStretch(1)
@@ -591,12 +592,21 @@ class SurveyExplorer(QMainWindow):
         self.sky.load(QUrl(link))
 
     def _run_brick_js(self, script, callback=None):
-        if not self._brick_overlay_features:
+        """Fail closed on unexpected external navigations or missing JS API."""
+        if not self._brick_overlay_features or not hasattr(self.sky, "page"):
+            return
+        url = self.sky.url()
+        if not (url.scheme() == "https" and
+                url.host().lower() == "www.legacysurvey.org" and
+                url.path().startswith("/viewer/")):
+            return
+        page = self.sky.page()
+        if not hasattr(page, "runJavaScript"):
             return
         if callback is None:
-            self.sky.page().runJavaScript(script)
+            page.runJavaScript(script)
         else:
-            self.sky.page().runJavaScript(script, callback)
+            page.runJavaScript(script, callback)
 
     def _install_bricks(self, attempt=0):
         if not self._brick_overlay_features:
@@ -623,6 +633,14 @@ class SurveyExplorer(QMainWindow):
         key = (self._brick_overlay_keys[row]
                if 0 <= row < len(self._brick_overlay_keys) else None)
         self._run_brick_js(highlight_script(key, hover=True))
+
+    def eventFilter(self, watched, event):
+        if (hasattr(self, "bricks") and
+                watched is self.bricks.viewport() and
+                event.type() == QEvent.Leave):
+            # Restore the persistent selected style when the table is left.
+            self._run_brick_js(highlight_script(None, hover=True))
+        return super().eventFilter(watched, event)
 
     def preview_brick(self, row: int, _column: int):
         """Preview a brick center; preserve current catalogue/selection state."""
