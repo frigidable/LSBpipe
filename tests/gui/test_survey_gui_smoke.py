@@ -344,3 +344,17 @@ def test_invalid_pair_paste_does_not_partially_overwrite_inputs(offline_explorer
         assert (window.ra.text(), window.dec.text()) == original
     finally:
         clip.setText(previous)
+
+
+def test_pair_paste_retains_submilliarcsecond_decimal_precision(offline_explorer):
+    from PySide6.QtWidgets import QApplication
+    window = offline_explorer
+    clipboard = QApplication.clipboard()
+    previous = clipboard.text()
+    try:
+        clipboard.setText("154.7709123456\t+46.4537123456")
+        window.paste_target_btn.click()
+        assert window.ra.value() == pytest.approx(154.7709123456, abs=5e-11)
+        assert window.dec.value() == pytest.approx(46.4537123456, abs=5e-11)
+    finally:
+        clipboard.setText(previous)
