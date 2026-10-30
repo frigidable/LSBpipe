@@ -471,3 +471,33 @@ def test_brick_selection_preserves_embedded_viewer_zoom_and_native_browser_fallb
     w.bricks.clearSelection()
     assert len(parse_qs(urlparse(
         w._viewer_link(include_bricks=True)).query)["poly"][0].split(";")) == 5
+
+
+def test_brick_hover_and_leave_are_fast_and_do_not_reload_remote_map(offline_explorer):
+    """Table hover is a Leaflet style update, never a webpage navigation."""
+    from unittest.mock import patch
+    from PySide6.QtCore import QEvent
+    window = offline_explorer
+    apply_offline_state(window, "S1")
+    with patch.object(window, "_run_brick_js") as js, patch.object(
+            window.sky, "load") as load:
+        window._hover_brick_row(0, 2)
+        assert 'hover("0")' in js.call_args.args[0]
+        window.eventFilter(window.bricks.viewport(), QEvent(QEvent.Leave))
+        assert 'hover(null)' in js.call_args.args[0]
+        window.bricks.selectRow(1)
+        assert 'select(' in js.call_args.args[0]
+        load.assert_not_called()
+
+
+def test_leaflet_script_refuses_untrusted_web_navigation(offline_explorer):
+    from unittest.mock import patch
+    from PySide6.QtCore import QUrl
+    window = offline_explorer
+    apply_offline_state(window, "S1")
+    page = window.sky
+    with patch.object(page, "url", return_value=QUrl(
+            "https://untrusted.example/viewer/")):
+        with patch.object(page, "page", create=True) as p:
+            window._run_brick_js("alert('must not run')")
+            p.assert_not_called()
