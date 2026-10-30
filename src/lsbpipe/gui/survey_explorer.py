@@ -186,16 +186,21 @@ class SurveyExplorer(QMainWindow):
         data_panel.setContentsMargins(10, 8, 10, 8)
         data_panel.setSpacing(6)
 
-        choices = QHBoxLayout()
+        # A vertical inspector should not behave like a wide spreadsheet.
+        data_panel.addWidget(QLabel("Archive product set"))
         self.profile = QComboBox()
-        self.profile.addItems(["Standard: image, invvar, maskbits, nexp, Tractor",
-                               "Extended: +psfsize, depth, galdepth, model"])
+        self.profile.addItems([
+            "Standard: image, invvar, maskbits, nexp, Tractor",
+            "Extended: +psfsize, depth, galdepth, model"])
+        self.profile.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.profile.setMinimumContentsLength(13)
         self.profile.currentIndexChanged.connect(self._apply_profile)
-        choices.addWidget(self.profile, 2)
-        self.verify_btn = QPushButton("Check selected files")
+        data_panel.addWidget(self.profile)
+        self.verify_btn = QPushButton("Check selected URLs")
         self.verify_btn.clicked.connect(self.verify)
-        choices.addWidget(self.verify_btn)
-        data_panel.addLayout(choices)
+        data_panel.addWidget(self.verify_btn)
+
         filters = QHBoxLayout()
         self.brick_filter = QComboBox()
         self.brick_filter.addItem("All bricks")
@@ -205,13 +210,22 @@ class SurveyExplorer(QMainWindow):
         self.band_filter.addItems(["All bands", "g", "r", "i", "z"])
         self.band_filter.currentIndexChanged.connect(self._filter_products)
         filters.addWidget(self.band_filter, 1)
+        data_panel.addLayout(filters)
         self.kind_filter = QComboBox()
         self.kind_filter.addItems(
             ["All products", "image", "invvar", "maskbits", "nexp",
              "tractor", "psfsize", "depth", "galdepth", "model"])
         self.kind_filter.currentIndexChanged.connect(self._filter_products)
-        filters.addWidget(self.kind_filter, 2)
-        data_panel.addLayout(filters)
+        data_panel.addWidget(self.kind_filter)
+
+        self.selected_label = QLabel("0 files selected")
+        self.selected_label.setWordWrap(True)
+        data_panel.addWidget(self.selected_label)
+        self.science_btn = QPushButton("Science quartet (4 FITS)")
+        self.science_btn.setToolTip(
+            "Select IMAGE, INVVAR, NEXP and MASKBITS for one selected brick and band")
+        self.science_btn.clicked.connect(self.select_science_quartet)
+        data_panel.addWidget(self.science_btn)
 
         selection_actions = QHBoxLayout()
         self.select_visible_btn = QPushButton("Select visible")
@@ -220,31 +234,33 @@ class SurveyExplorer(QMainWindow):
         self.clear_visible_btn = QPushButton("Clear visible")
         self.clear_visible_btn.clicked.connect(lambda: self._set_visible_selection(False))
         selection_actions.addWidget(self.clear_visible_btn)
-        self.clear_all_btn = QPushButton("Clear all")
+        data_panel.addLayout(selection_actions)
+        self.clear_all_btn = QPushButton("Clear all (including hidden)")
         self.clear_all_btn.setToolTip(
             "Deselect every file, including entries hidden by the current filters")
         self.clear_all_btn.clicked.connect(self._clear_all_selection)
-        selection_actions.addWidget(self.clear_all_btn)
-        self.science_btn = QPushButton("Science quartet")
-        self.science_btn.setToolTip(
-            "Select IMAGE, INVVAR, NEXP, MASKBITS for one selected brick and band")
-        self.science_btn.clicked.connect(self.select_science_quartet)
-        selection_actions.addWidget(self.science_btn)
-        self.selected_label = QLabel("0 files selected")
-        selection_actions.addWidget(self.selected_label, 2)
-        data_panel.addLayout(selection_actions)
+        data_panel.addWidget(self.clear_all_btn)
 
-        self.files = QTableWidget(0, 6)
-        self.files.setAccessibleName("Candidate Legacy FITS files and download selections")
+        self.files = QTableWidget(0, 4)
+        self.files.setAccessibleName(
+            "Candidate Legacy FITS files, HTTP evidence and download selections")
         self.files.setHorizontalHeaderLabels(
-            ["Use", "Brick", "Product", "Band", "Evidence", "Size"])
+            ["Use", "Product / provenance", "HTTP", "MiB"])
         self.files.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents)
+            0, QHeaderView.Fixed)
+        self.files.horizontalHeader().resizeSection(0, 37)
         self.files.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.Stretch)
+            1, QHeaderView.Stretch)
+        self.files.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.Fixed)
+        self.files.horizontalHeader().resizeSection(2, 54)
+        self.files.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.Fixed)
+        self.files.horizontalHeader().resizeSection(3, 43)
         self.files.setTextElideMode(Qt.ElideMiddle)
         self.files.setAlternatingRowColors(True)
-        self.files.setMinimumHeight(148)
+        self.files.setMinimumHeight(160)
+        self.files.verticalHeader().setVisible(False)
         data_panel.addWidget(self.files, 3)
 
         # Advanced local FITS coverage parameters are available on demand;
@@ -256,30 +272,36 @@ class SurveyExplorer(QMainWindow):
             "Show circular source and sky-ring radii for local FITS diagnostics")
         data_panel.addWidget(self.qa_toggle)
         self.qa_widget = QWidget()
-        qa_layout = QHBoxLayout(self.qa_widget)
+        qa_layout = QVBoxLayout(self.qa_widget)
         qa_layout.setContentsMargins(0, 0, 0, 0)
-        qa_layout.addWidget(QLabel("Radii (arcsec):"))
+        qa_layout.setSpacing(4)
         self.target_radius = QDoubleSpinBox()
         self.target_radius.setRange(1, 1000)
         self.target_radius.setDecimals(1)
         self.target_radius.setValue(60.)
-        self.target_radius.setToolTip("Circular object screening region; not a fitted isophote")
-        qa_layout.addWidget(self.target_radius)
+        self.target_radius.setToolTip(
+            "Circular object screening region; not a fitted isophote")
         self.sky_inner = QDoubleSpinBox()
         self.sky_inner.setRange(1, 1100)
         self.sky_inner.setDecimals(1)
         self.sky_inner.setValue(90.)
         self.sky_inner.setToolTip("Inner radius of diagnostic sky ring")
-        qa_layout.addWidget(self.sky_inner)
         self.sky_outer = QDoubleSpinBox()
         self.sky_outer.setRange(1, 1200)
         self.sky_outer.setDecimals(1)
         self.sky_outer.setValue(180.)
         self.sky_outer.setToolTip("Outer radius of diagnostic sky ring")
-        qa_layout.addWidget(self.sky_outer)
+        for label, control in (
+                ("Object radius (arcsec)", self.target_radius),
+                ("Sky inner (arcsec)", self.sky_inner),
+                ("Sky outer (arcsec)", self.sky_outer)):
+            line = QHBoxLayout()
+            line.addWidget(QLabel(label))
+            line.addWidget(control)
+            qa_layout.addLayout(line)
         self.qa_btn = QPushButton("Inspect local FITS")
         self.qa_btn.setToolTip(
-            "Analyse an already-downloaded brick using IMAGE, INVVAR, NEXP and MASKBITS")
+            "Analyse downloaded IMAGE, INVVAR, NEXP and MASKBITS")
         self.qa_btn.clicked.connect(self.inspect_coverage)
         qa_layout.addWidget(self.qa_btn)
         data_panel.addWidget(self.qa_widget)
@@ -294,9 +316,9 @@ class SurveyExplorer(QMainWindow):
         self.download_btn.clicked.connect(self.download)
         bottom.addWidget(self.download_btn)
         # Footer stays pinned even while product rows scroll.
-        self.data_drawer = QDockWidget("Science files · coverage diagnostics", self)
+        self.data_drawer = QDockWidget("Archive files · coverage QA", self)
         self.data_drawer.setObjectName("science_data_drawer")
-        self.data_drawer.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self.data_drawer.setAllowedAreas(Qt.RightDockWidgetArea)
         self.data_drawer.setFeatures(
             QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         # A wide file table must scroll within the drawer, never force the
@@ -306,7 +328,7 @@ class SurveyExplorer(QMainWindow):
         self.data_scroll.setObjectName("science_data_scroll")
         self.data_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.data_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.data_scroll.setMinimumWidth(200)
+        self.data_scroll.setMinimumWidth(150)
         self.data_scroll.setWidget(data_container)
         drawer_body = QWidget()
         drawer_layout = QVBoxLayout(drawer_body)
@@ -315,7 +337,7 @@ class SurveyExplorer(QMainWindow):
         drawer_layout.addWidget(self.data_scroll, 1)
         drawer_layout.addLayout(bottom, 0)
         self.data_drawer.setWidget(drawer_body)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.data_drawer)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.data_drawer)
         self.data_drawer.visibilityChanged.connect(self._drawer_visibility_changed)
         self.data_drawer.hide()
 
@@ -349,6 +371,7 @@ class SurveyExplorer(QMainWindow):
         self.preview_label.setAccessibleName("Remote image provenance warning")
         preview_layout.addWidget(self.preview_label)
         preview_layout.addWidget(self.sky, 1)
+        self.workspace_split = split
         split.addWidget(self.navigation_scroll)
         split.addWidget(preview_container)
         split.setStretchFactor(0, 0)
@@ -368,10 +391,22 @@ class SurveyExplorer(QMainWindow):
             self._size_data_drawer()
 
     def _size_data_drawer(self):
-        # Keep several product rows visible while allowing the central
-        # image to retain useful height on laptop screens.
-        preferred = max(290, min(390, round(self.height() * 0.42)))
-        self.resizeDocks([self.data_drawer], [preferred], Qt.Vertical)
+        """Bound the right-side inspector to protect the map's width.
+
+        At laptop widths the navigation contracts so the online sky viewer
+        remains the main area. Users can still resize/hide the inspector.
+        """
+        width = self.width()
+        desired = max(285, min(415, round(width * 0.215)))
+        if width < 1500:
+            navigation = 290
+        elif width < 1800:
+            navigation = 320
+        else:
+            navigation = 350
+        self.workspace_split.setSizes(
+            [navigation, max(300, width-navigation-desired)])
+        self.resizeDocks([self.data_drawer], [desired], Qt.Horizontal)
 
     def _drawer_visibility_changed(self, visible):
         self.data_toggle.setText(
@@ -579,7 +614,7 @@ class SurveyExplorer(QMainWindow):
         self.brick_filter.blockSignals(False)
 
     def _fill_files(self, *, checked_paths=None):
-        """Display compact scientific identities; retain selection across profiles."""
+        """Compact row identity, full provenance on hover, persistent selection."""
         entries = self.manifest["products"] if self.manifest else []
         self.files.setRowCount(len(entries))
         for row, entry in enumerate(entries):
@@ -589,19 +624,29 @@ class SurveyExplorer(QMainWindow):
             check.toggled.connect(self._update_selection_summary)
             holder = QWidget()
             layout = QHBoxLayout(holder)
-            layout.setContentsMargins(3, 1, 3, 1)
+            layout.setContentsMargins(1, 0, 1, 0)
             layout.addWidget(check, alignment=Qt.AlignCenter)
             self.files.setCellWidget(row, 0, holder)
-            details = (
-                (1, entry["brick"]), (2, entry["kind"]),
-                (3, entry["band"] or "shared"), (4, entry["evidence"]),
-                (5, "—"))
-            for col, value in details:
+            suffix = f"{entry['kind']}-{entry['band']}" if entry["band"] else entry["kind"]
+            name = f"{entry['release'].upper()} {entry['brick']} · {suffix}"
+            detail = entry["relative_path"] + chr(10) + entry["url"]
+            values = (
+                (1, name),
+                (2, self._short_http_evidence(entry["evidence"])),
+                (3, "—"))
+            for col, value in values:
                 item = QTableWidgetItem(str(value))
-                item.setToolTip(
-                    entry["relative_path"] + chr(10) + entry["url"])
+                item.setToolTip(detail + chr(10) + f"Status: {entry['evidence']}")
                 self.files.setItem(row, col, item)
         self._filter_products()
+
+    @staticmethod
+    def _short_http_evidence(evidence):
+        return {
+            "HTTP_OK": "OK", "HTTP_MISSING": "404",
+            "HTTP_ERROR": "ERR", "HTTP_UNVERIFIED": "?", 
+            "UNVERIFIED_URL": "?",
+        }.get(evidence, "?")
 
     def _is_visible_product(self, entry):
         return matching_product(
@@ -748,10 +793,15 @@ class SurveyExplorer(QMainWindow):
             if r is None:
                 continue
             entry.update(r)
-            self.files.item(row, 4).setText(r["evidence"])
+            self.files.item(row, 2).setText(
+                self._short_http_evidence(r["evidence"]))
             size = r.get("size_bytes")
-            self.files.item(row, 5).setText(
-                f"{size / 1048576:.1f} MiB" if size is not None else "—")
+            self.files.item(row, 3).setText(
+                f"{size / 1048576:.0f}" if size is not None else "—")
+            self.files.item(row, 2).setToolTip(
+                entry["relative_path"] + chr(10) + f"Status: {r['evidence']}")
+            self.files.item(row, 3).setToolTip(
+                f"{size} bytes" if size is not None else "Size unknown")
         self._update_selection_summary()
         self.message.setText(
             f"Verified {len(results)} URL responses; check statuses before download.")
