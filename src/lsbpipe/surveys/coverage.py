@@ -15,7 +15,6 @@ import math
 import numpy as np
 
 from .legacy import SkyField
-from .transfer import _validated_product
 from lsbpipe.survey import LEGACY_BITS, _check_wcs_compatible
 
 
@@ -85,7 +84,8 @@ def coverage_from_arrays(
     shape = arrays[0].shape
     if len(shape) != 2 or not all(a.shape == shape for a in arrays):
         raise ValueError("All four science layers must share the same 2D grid")
-    if arrays[3].dtype.kind not in "iu" or arrays[3].dtype.itemsize > 4:
+    if (arrays[3].dtype.kind not in "iu" or
+            arrays[3].dtype.itemsize not in (2, 4)):
         raise ValueError("MASKBITS must be 16/32-bit integer raster")
     if not getattr(wcs, 'has_celestial', False):
         raise ValueError("A celestial WCS is required")
@@ -131,6 +131,9 @@ def coverage_from_arrays(
                (radius2 <= sky_outer_arcsec**2))
         image_part, ivar_part, nexp_part, bits_part = (
             array[start:stop] for array in arrays)
+        if (bits_part.dtype.kind == "i" and bits_part.dtype.itemsize == 4
+                and np.any(bits_part < 0)):
+            raise ValueError("Negative signed-32 MASKBITS unsupported")
         data_ok = np.isfinite(image_part)
         weight_ok = np.isfinite(ivar_part) & (ivar_part > 0)
         exposure_ok = np.isfinite(nexp_part) & (nexp_part > 0)
