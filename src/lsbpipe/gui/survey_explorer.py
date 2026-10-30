@@ -184,6 +184,11 @@ class SurveyExplorer(QMainWindow):
         self.clear_visible_btn = QPushButton("Clear visible")
         self.clear_visible_btn.clicked.connect(lambda: self._set_visible_selection(False))
         selection_actions.addWidget(self.clear_visible_btn)
+        self.science_btn = QPushButton("Science quartet")
+        self.science_btn.setToolTip(
+            "Select IMAGE, INVVAR, NEXP, MASKBITS for one selected brick and band")
+        self.science_btn.clicked.connect(self.select_science_quartet)
+        selection_actions.addWidget(self.science_btn)
         self.selected_label = QLabel("0 files selected")
         selection_actions.addWidget(self.selected_label, 2)
         panel.addLayout(selection_actions)
@@ -500,6 +505,55 @@ class SurveyExplorer(QMainWindow):
                 self.files.cellWidget(
                     row, 0).findChild(QCheckBox).setChecked(checked)
         self._update_selection_summary()
+
+    def select_science_quartet(self):
+        """Prepare *exactly* four primary science products for a brick and band.
+
+        Explicitly clears the whole manifest selection, not just visible
+        rows, so choosing one science bundle cannot accidentally leave 80
+        unrelated files selected.
+        """
+        if self.manifest is None:
+            return
+        row = self.bricks.currentRow()
+        if not (0 <= row < len(self.hits)):
+            QMessageBox.information(
+                self, "Select a brick",
+                "Select one release/region brick row above first.")
+            return
+        hit = self.hits[row]
+        bands = tuple(hit.median_exposures)
+        if not bands:
+            QMessageBox.warning(self, "No band", "No optical bands listed.")
+            return
+        default = bands.index("r") if "r" in bands else 0
+        band, ok = QInputDialog.getItem(
+            self, "Science quartet", "Band:", list(bands), default, False)
+        if not ok:
+            return
+        needed = {
+            (hit.release, hit.region, hit.name, "image", band),
+            (hit.release, hit.region, hit.name, "invvar", band),
+            (hit.release, hit.region, hit.name, "nexp", band),
+            (hit.release, hit.region, hit.name, "maskbits", None)}
+        available = {
+            (e["release"],e["region"],e["brick"],e["kind"],e["band"])
+            for e in self.manifest["products"]}
+        if not needed.issubset(available):
+            QMessageBox.warning(
+                self, "Incomplete manifest",
+                "Not all four products are in the current download profile.")
+            return
+        for i, entry in enumerate(self.manifest["products"]):
+            key = (entry["release"],entry["region"],entry["brick"],
+                   entry["kind"],entry["band"])
+            self.files.cellWidget(
+                i,0).findChild(QCheckBox).setChecked(key in needed)
+        self._update_selection_summary()
+        self.message.setText(
+            f"Science quartet selected: {hit.release.upper()} "
+            f"{hit.region} {hit.name} {band}-band. "
+            "Verify URLs before downloading.")
 
     def _selected(self):
         if not self.manifest:
