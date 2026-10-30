@@ -1,0 +1,47 @@
+name: UI baseline — offline Qt captures
+
+on:
+  push:
+    branches:
+      - feature/autonomous-ui-system
+  pull_request:
+    paths:
+      - "AGENTS.md"
+      - "docs/ux/**"
+      - "scripts/capture_gui_baseline.py"
+      - "tests/gui/**"
+      - "src/lsbpipe/gui/**"
+      - ".github/workflows/ui-baseline.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gui-baseline:
+    name: Windows PySide6 offline screenshot evidence
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+      PYTEST_QT_API: pyside6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install LSBpipe GUI and test dependencies
+        run: python -m pip install -e ".[gui,test]" pytest-qt
+      - name: Offline GUI smoke tests
+        run: python -m pytest -q tests/gui
+      - name: Capture GUI baseline (remote Viewer deliberately blank)
+        run: python scripts/capture_gui_baseline.py --output-dir gui-artifacts
+      - name: Publish screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lsbpipe-gui-baseline-${{ github.run_id }}
+          path: gui-artifacts/
+          if-no-files-found: warn
+          retention-days: 30
