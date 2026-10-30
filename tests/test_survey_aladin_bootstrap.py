@@ -1,67 +1,47 @@
-"""Pure startup-contract checks for the optional Aladin WebEngine shell.
+"""Offline GUI integration contracts for the hosted Legacy Sky Viewer.
 
-These tests are deliberately offline and do NOT claim that WebGL2, CDN
-scripts or WASM load successfully in an actual browser.
+These tests verify URL navigation and failure paths, not live page rendering,
+which requires on-device network/QtWebEngine interaction.
 """
-from html.parser import HTMLParser
+import inspect
 import pytest
 
 pytest.importorskip("PySide6")
-from lsbpipe.gui.survey_explorer import _ALADIN_HTML, _AladinPageHandler
+from lsbpipe.gui.survey_explorer import SurveyExplorer, _DiagnosticWebPage
 
 
-class Scripts(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.scripts = []
-    def handle_starttag(self, tag, attrs):
-        if tag == 'script':
-            self.scripts.append(dict(attrs))
+def test_viewer_is_top_level_not_aladin_or_iframe():
+    ui = inspect.getsource(SurveyExplorer._build_ui)
+    method = inspect.getsource(SurveyExplorer.show_viewer)
+    assert "QWebEngineView()" in ui
+    assert "QWebEnginePage" not in method
+    assert "self.sky.load(QUrl(link))" in method
+    assert "self._viewer_link()" in method
+    assert "setHtml" not in method
+    assert "Aladin" not in ui
+    assert "_serve_aladin_page" not in ui
 
 
-def test_bootstrap_is_inline_and_does_not_block_on_jquery():
-    parser = Scripts()
-    parser.feed(_ALADIN_HTML)
-    assert len(parser.scripts) == 1
-    assert 'src' not in parser.scripts[0]
-    assert 'jquery' not in _ALADIN_HTML.lower()
-    assert "script.async = true" in _ALADIN_HTML
-    assert 'script.onerror' in _ALADIN_HTML
-    assert 'script.onload' in _ALADIN_HTML
+def test_coords_need_explicit_navigation_to_avoid_network_storms():
+    ui = inspect.getsource(SurveyExplorer._build_ui)
+    assert "self.center_btn.clicked.connect(self.show_viewer)" in ui
+    assert "self.ra.valueChanged.connect" not in ui
+    assert "self.dec.valueChanged.connect" not in ui
+    assert "self.width.valueChanged.connect" not in ui
 
 
-def test_sky_bridge_and_wasm_diagnostics_contract():
-    assert 'window.lsbGo = function' in _ALADIN_HTML
-    assert 'window.lsbMapCentre = function' in _ALADIN_HTML
-    assert 'window.lsbBricks = function' in _ALADIN_HTML
-    assert 'window.lsbDiagnostics = function' in _ALADIN_HTML
-    assert "getContext('webgl2')" in _ALADIN_HTML
-    assert 'wasm_error' in _ALADIN_HTML
-    assert 'script_error' in _ALADIN_HTML
-    assert 'timeout' in _ALADIN_HTML
+def test_browser_fallback_and_diagnostics():
+    assert "QDesktopServices.openUrl(QUrl(self._viewer_link()))" in (
+        inspect.getsource(SurveyExplorer.open_viewer_in_browser))
+    diag = inspect.getsource(SurveyExplorer.show_viewer_diagnostics)
+    assert "JSON.stringify" in diag
+    assert "recent_console" in diag
+    assert "documentReady" in diag
+    assert hasattr(_DiagnosticWebPage, "javaScriptConsoleMessage")
 
 
-def test_http_handler_has_no_general_directory_access():
-    assert _AladinPageHandler.do_GET.__doc__ is None
-    assert "if self.path != '/':" in __import__('inspect').getsource(
-        _AladinPageHandler.do_GET)
-
-def test_diagnostics_serializes_browser_result_and_exposes_raw_status():
-    import inspect
-    from lsbpipe.gui.survey_explorer import SurveyExplorer, _DiagnosticWebPage
-    diagnostics = inspect.getsource(SurveyExplorer.show_map_diagnostics)
-    assert 'JSON.stringify' in diagnostics
-    assert 'documentReady' in diagnostics
-    assert 'onPageNotice' in diagnostics
-    assert 'recent_console' in diagnostics
-    assert 'json.loads(payload)' in diagnostics
-    assert 'JavaScript returned' in diagnostics
-    assert hasattr(_DiagnosticWebPage, 'javaScriptConsoleMessage')
-
-
-def test_safe_external_fallback_is_available():
-    import inspect
-    from lsbpipe.gui.survey_explorer import SurveyExplorer
-    source = inspect.getsource(SurveyExplorer._build_ui)
-    assert 'Aladin in browser' in source
-    assert 'https://aladin.cds.unistra.fr/AladinLite/' in source
+def test_release_region_picker_is_conservative():
+    code = inspect.getsource(SurveyExplorer._preferred_viewer_region)
+    assert "32.375" in code
+    assert "return None" in code
+    assert "release in ('dr9', 'dr11')" in code
