@@ -35,12 +35,16 @@ font:13px sans-serif;padding:7px;z-index:10;pointer-events:none}</style></head>
 <script>
 window.lsbMapCentre = function(){return window.lsbAladin ? window.lsbAladin.getRaDec() : null;};
 window.lsbGo = function(ra,dec,fov){
-    if (!window.lsbAladin) return;
+    // Remember the latest request while Aladin's external JS/WASM initializes.
+    window.lsbPendingGo = [ra,dec,fov];
+    if (!window.lsbAladin) return false;
     window.lsbAladin.gotoRaDec(ra,dec);
     window.lsbAladin.setFov(fov);
+    return true;
 };
 window.lsbBricks = function(boxes){
-    if (!window.lsbAladin) return;
+    window.lsbPendingBricks = boxes;
+    if (!window.lsbAladin) return false;
     if (window.lsbOverlay && typeof window.lsbOverlay.removeAll === 'function'){
         window.lsbOverlay.removeAll();
     } else {
@@ -56,6 +60,7 @@ window.lsbBricks = function(boxes){
           ])]);
         }
     });
+    return true;
 };
 if (window.A){
     A.init.then(function(){
@@ -63,6 +68,8 @@ if (window.A){
           {survey:'P/DSS2/color',target:'154.7709 +46.4537',
            fov:0.5,cooFrame:'ICRSd',showReticle:true});
         document.getElementById('notice').style.display='none';
+        if (window.lsbPendingGo) window.lsbGo(...window.lsbPendingGo);
+        if (window.lsbPendingBricks) window.lsbBricks(window.lsbPendingBricks);
     }).catch(e => {document.getElementById('notice').textContent='Aladin error: '+e;});
 } else {
     document.getElementById('notice').textContent='Aladin script unavailable; check internet access';
@@ -184,6 +191,7 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(self.message)
 
         self.sky = QWebEngineView()
+        self.sky.loadFinished.connect(self._on_map_page_loaded)
         self.sky.setHtml(_ALADIN_HTML, QUrl("https://aladin.cds.unistra.fr/"))
         split.addWidget(left)
         split.addWidget(self.sky)
@@ -194,12 +202,35 @@ class SurveyExplorer(QMainWindow):
         self.width.valueChanged.connect(self._goto_aladin)
         self.search_btn.setDefault(True)
 
+    def _on_map_page_loaded(self, success: bool):
+        """HTML loading is async; the Aladin WASM init may finish even later."""
+        if not success:
+            self.message.setText("Aladin HTML load failed; check network/WebEngine.")
+            return
+        # Defers coordinates to the JS bridge, which queues them until A.init.
+        self._goto_aladin()
+        self.sky.page().runJavaScript(
+            "({bridge: typeof window.lsbGo === 'function',"
+            "aladin: !!window.lsbAladin,"
+            "notice: document.getElementById('notice')?.textContent || ''})",
+            self._on_map_bridge_checked)
+
+    def _on_map_bridge_checked(self, state):
+        if not isinstance(state, dict) or not state.get('bridge'):
+            self.message.setText(
+                "Aladin bridge missing: inspect WebEngine/network access.")
+        # A.init may still be loading; the on-map notice reports script errors.
+
     def _field(self):
         return SkyField(self.ra.value(), self.dec.value(), self.width.value())
 
     def _goto_aladin(self, _=None):
         field = self._field()
-        script = f"window.lsbGo({field.ra_deg!r},{field.dec_deg!r},{field.width_arcmin / 60!r});"
+        script = (
+            "typeof window.lsbGo === 'function' ? "
+            f"window.lsbGo({field.ra_deg!r},{field.dec_deg!r},{field.width_arcmin / 60!r}) "
+            ": false"
+        )
         self.sky.page().runJavaScript(script)
 
     def use_map_center(self):
@@ -209,7 +240,9 @@ class SurveyExplorer(QMainWindow):
                 if isinstance(ra, (int, float)) and isinstance(dec, (int, float)):
                     self.ra.setValue(ra % 360)
                     self.dec.setValue(dec)
-        self.sky.page().runJavaScript("window.lsbMapCentre()", done)
+        self.sky.page().runJavaScript(
+            "typeof window.lsbMapCentre === 'function' ? "
+            "window.lsbMapCentre() : null", done)
 
     def _start(self, action, finished):
         if self.thread is not None:
@@ -283,7 +316,9 @@ class SurveyExplorer(QMainWindow):
             "File URLs are unverified until checked.")
         self._fill_files()
         boxes = [[h.ra1, h.ra2, h.dec1, h.dec2] for h in hits]
-        self.sky.page().runJavaScript("window.lsbBricks(" + json.dumps(boxes) + ");")
+        self.sky.page().runJavaScript(
+            "typeof window.lsbBricks === 'function' ? "
+            "window.lsbBricks(" + json.dumps(boxes) + ") : false")
         self.message.setText(f"{len(manifest['products'])} candidate files")
 
     def _fill_files(self):
