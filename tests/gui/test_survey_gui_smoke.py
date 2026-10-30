@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6.QtWebEngineWidgets")
 
-from scripts.offline_gui_fixture import offline_legacy_viewer
+from scripts.offline_gui_fixture import offline_legacy_viewer, apply_offline_state
 
 from lsbpipe.gui.survey_explorer import SurveyExplorer
 
@@ -43,7 +43,8 @@ def test_window_resizes_without_losing_core_widgets(offline_explorer, qtbot, wid
     assert window.search_btn.isVisible()
     assert window.sky.isVisible()
     assert window.bricks.isVisible()
-    assert window.files.isVisible()
+    assert not window.data_drawer.isVisible()
+    assert window.sky.width() >= width * 0.55
     assert window.size().width() == width
     assert window.size().height() == height
 
@@ -74,3 +75,55 @@ def test_filtering_does_not_silently_deselect_hidden_files(offline_explorer):
     # Hidden g image stays selected, visible r + shared mask are cleared.
     assert window._selected() == {"g-image.fits"}
     assert "1 selected" in window.selected_label.text()
+
+
+def test_data_workbench_is_progressive_and_essential_actions_remain_reachable(
+        offline_explorer, qtbot):
+    window = offline_explorer
+    assert not window.data_drawer.isVisible()
+    assert window.data_toggle.isVisible()
+    window.data_toggle.click()
+    qtbot.wait(20)
+    assert window.data_drawer.isVisible()
+    assert window.files.isVisible()
+    assert window.qa_btn.isVisible()
+    assert window.download_btn.isVisible()
+    window.data_toggle.click()
+    qtbot.wait(20)
+    assert not window.data_drawer.isVisible()
+    assert window.message.isVisible()
+    assert window.bar.isVisible()
+
+
+@pytest.mark.parametrize("state,expected", [
+    ("S1", 88), ("S2", 88), ("S3", 4)
+])
+def test_offline_population_scenarios_and_selection(offline_explorer, state, expected):
+    window = offline_explorer
+    apply_offline_state(window, state)
+    assert len(window.hits) == 8
+    assert len(window.manifest["products"]) == 88
+    assert len(window._selected()) == expected
+    assert window.data_drawer.isVisible()
+    assert window.files.isVisible()
+    if state == "S2":
+        assert sum(window.files.isRowHidden(i)
+                   for i in range(window.files.rowCount())) > 0
+    if state == "S3":
+        selected = [
+            item for item in window.manifest["products"]
+            if item["relative_path"] in window._selected()
+        ]
+        assert {item["kind"] for item in selected} == {
+            "image", "invvar", "nexp", "maskbits"}
+        assert {item["brick"] for item in selected} == {"1544p465"}
+
+
+def test_navigation_scroll_keeps_dense_controls_accessible(offline_explorer, qtbot):
+    window = offline_explorer
+    window.resize(1366, 768)
+    qtbot.wait(30)
+    assert window.navigation_scroll.width() <= 425
+    assert window.navigation_scroll.verticalScrollBar() is not None
+    assert window.search_btn.isVisible()
+    assert window.data_toggle.isVisible()
