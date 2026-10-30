@@ -13,10 +13,12 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 astro = ["astropy>=6.0"]
 exact = ["astropy>=6.0", "photutils>=2.0"]
 demo = ["matplotlib"]
+gui = ["PySide6>=6.6", "astropy>=6.0"]
 test = ["pytest"]
 
 [project.scripts]
 lsbpipe = "lsbpipe.cli:main"
+lsbpipe-survey-gui = "lsbpipe.gui.survey_explorer:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
