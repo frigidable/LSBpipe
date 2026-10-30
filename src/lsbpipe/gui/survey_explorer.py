@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QLineEdit,
@@ -25,6 +25,7 @@ from lsbpipe.surveys.legacy import (
 from lsbpipe.surveys.transfer import probe_product, download_manifest
 from lsbpipe.surveys.viewer import viewer_url, suggested_zoom
 from lsbpipe.surveys.selection import matching_product, summarize_selection
+from lsbpipe.surveys.brick_overlay import brick_shapes, installation_script, highlight_script
 from lsbpipe.gui.target_input import (
     parse_ra_deg, parse_dec_deg, parse_width_arcmin, parse_coordinate_pair)
 
@@ -124,6 +125,8 @@ class SurveyExplorer(QMainWindow):
         self.manifest = None
         self.worker = None
         self.thread = None
+        self._brick_overlay_features = []
+        self._brick_overlay_keys = []
         self._build_ui()
 
     def _build_ui(self):
@@ -258,6 +261,8 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(self.bricks, 1)
         self.bricks.cellDoubleClicked.connect(self.preview_brick)
         self.bricks.itemSelectionChanged.connect(self._selected_brick_changed)
+        self.bricks.setMouseTracking(True)
+        self.bricks.cellEntered.connect(self._hover_brick_row)
         panel.addWidget(QLabel("Double-click a brick to preview its center"))
         panel.addStretch(1)
 
@@ -585,19 +590,39 @@ class SurveyExplorer(QMainWindow):
             "The colored boundary is a selection preview, not a coverage map.")
         self.sky.load(QUrl(link))
 
-    def _selected_brick_changed(self):
-        """Refresh the map overlay when a brick is selected in the table.
+    def _run_brick_js(self, script, callback=None):
+        if not self._brick_overlay_features:
+            return
+        if callback is None:
+            self.sky.page().runJavaScript(script)
+        else:
+            self.sky.page().runJavaScript(script, callback)
 
-        The hosted site exposes native poly outlines but no documented API
-        for per-polygon hover opacity. Selection is therefore explicit.
-        """
-        if not self.hits:
+    def _install_bricks(self, attempt=0):
+        if not self._brick_overlay_features:
             return
-        try:
-            self._field()
-        except ValueError:
-            return
-        self.sky.load(QUrl(self._viewer_link()))
+        self._run_brick_js(
+            installation_script(self._brick_overlay_features),
+            lambda result: self._brick_install_result(result, attempt))
+
+    def _brick_install_result(self, result, attempt):
+        if result == "unavailable" and attempt < 6 and self.hits:
+            QTimer.singleShot(450, lambda: self._install_bricks(attempt + 1))
+        elif isinstance(result, str) and result.startswith("ready:"):
+            self._selected_brick_changed()
+
+    def _selected_brick_changed(self):
+        """Highlight selected brick without reloading the hosted map."""
+        row = self.bricks.currentRow()
+        key = (self._brick_overlay_keys[row]
+               if self.bricks.selectedItems() and
+                  0 <= row < len(self._brick_overlay_keys) else None)
+        self._run_brick_js(highlight_script(key))
+
+    def _hover_brick_row(self, row, _column):
+        key = (self._brick_overlay_keys[row]
+               if 0 <= row < len(self._brick_overlay_keys) else None)
+        self._run_brick_js(highlight_script(key, hover=True))
 
     def preview_brick(self, row: int, _column: int):
         """Preview a brick center; preserve current catalogue/selection state."""
@@ -631,6 +656,7 @@ class SurveyExplorer(QMainWindow):
 
     def _viewer_load_finished(self, success: bool):
         if success:
+            self._install_bricks()
             self.message.setText(
                 "Legacy Viewer page loaded. This does not certify that all "
                 "tiles or external scripts have loaded; inspect the image.")
@@ -732,6 +758,7 @@ class SurveyExplorer(QMainWindow):
     def _receive_search(self, result):
         hits, manifest = result
         self.hits, self.manifest = hits, manifest
+        self._brick_overlay_features, self._brick_overlay_keys = brick_shapes(hits)
         self.bricks.setRowCount(len(hits))
         for row, h in enumerate(hits):
             medians = "/".join(str(h.median_exposures.get(b) or 0)
