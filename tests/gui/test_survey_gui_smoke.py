@@ -358,3 +358,53 @@ def test_pair_paste_retains_submilliarcsecond_decimal_precision(offline_explorer
         assert window.dec.value() == pytest.approx(46.4537123456, abs=5e-11)
     finally:
         clipboard.setText(previous)
+
+
+
+def test_search_area_defaults_to_five_arcmin_and_has_clear_name(offline_explorer):
+    from urllib.parse import urlparse, parse_qs
+    window = offline_explorer
+    assert window.field_width.value() == pytest.approx(5.0)
+    assert window.field_width.accessibleName() == (
+        "Square search area side length, arcminutes")
+    assert window.field_width.toolTip().startswith(
+        "Side length of the square search area")
+    params = parse_qs(urlparse(window._viewer_link()).query)
+    assert "poly" in params
+    assert len(params["poly"][0].split(",")) == 34
+
+
+def test_search_outline_tracks_edited_coordinates_and_width(offline_explorer):
+    from urllib.parse import urlparse, parse_qs
+    from lsbpipe.surveys.legacy import SkyField
+    from lsbpipe.surveys.viewer import field_polygon_query
+    window = offline_explorer
+    window.ra.setText("40.096208")
+    window.dec.setText("+1.229250")
+    window.field_width.setText("0.25 deg")
+    params = parse_qs(urlparse(window._viewer_link()).query)
+    assert params["poly"] == [field_polygon_query(
+        SkyField(40.096208, 1.22925, 15))]
+    assert params['mark'] == ['40.0962080,1.2292500']
+
+
+def test_brick_preview_preserves_target_overlay(offline_explorer, qtbot):
+    from unittest.mock import patch
+    from PySide6.QtCore import QUrl
+    from urllib.parse import urlparse, parse_qs
+    from lsbpipe.surveys.legacy import SkyField
+    from lsbpipe.surveys.viewer import field_polygon_query
+    window = offline_explorer
+    window.ra.setText("40.096208")
+    window.dec.setText("+1.229250")
+    window.field_width.setText("5")
+    apply_offline_state(window, "S1")
+    target = SkyField(40.096208, 1.22925, 5)
+    with patch.object(window.sky, 'load') as loader:
+        window.preview_brick(0, 0)
+    loader.assert_called_once()
+    sent = loader.call_args.args[0]
+    assert isinstance(sent, QUrl)
+    params = parse_qs(urlparse(sent.toString()).query)
+    assert params["poly"] == [field_polygon_query(target)]
+    assert "mark" not in params
