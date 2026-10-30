@@ -45,3 +45,23 @@ def test_release_region_picker_is_conservative():
     assert "32.375" in code
     assert "return None" in code
     assert "release in ('dr9', 'dr11')" in code
+
+def test_gui_has_zoom_filter_and_explicit_download_confirmation():
+    code = inspect.getsource(SurveyExplorer._build_ui)
+    assert "setZoomFactor" in code
+    assert "self.brick_filter" in code
+    assert "self.band_filter" in code
+    assert "self.kind_filter" in code
+    assert "self.view_mode" in code
+    assert "self.select_visible_btn" in code
+    assert "self.clear_visible_btn" in code
+    assert "cellDoubleClicked.connect(self.preview_brick)" in code
+    assert "QMessageBox.question" in inspect.getsource(SurveyExplorer.download)
+    assert "summarize_selection" in inspect.getsource(SurveyExplorer.download)
+
+
+def test_visible_filter_is_not_a_global_selection_mutation():
+    code = inspect.getsource(SurveyExplorer._filter_products)
+    assert "setRowHidden" in code
+    assert "setChecked" not in code
+    assert "isRowHidden" in inspect.getsource(SurveyExplorer._set_visible_selection)
