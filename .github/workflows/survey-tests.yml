@@ -41,5 +41,5 @@ jobs:
         run: python -m pip install -e ".[gui,test]"
       - name: Verify GUI import without launching a display
         run: python -c "from lsbpipe.gui.survey_explorer import SurveyExplorer; print(SurveyExplorer.__name__)"
-      - name: Verify offline Aladin bootstrap contracts
-        run: python -m pytest -q tests/test_survey_aladin_bootstrap.py
+      - name: Verify official Viewer GUI integration contracts
+        run: python -m pytest -q tests/test_survey_aladin_bootstrap.py tests/test_survey_viewer.py
