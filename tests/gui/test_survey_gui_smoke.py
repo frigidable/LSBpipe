@@ -1,7 +1,7 @@
 """Offline Survey Explorer behavior smoke tests; no archive or Viewer I/O."""
 from __future__ import annotations
 
-from unittest.mock import patch
+from scripts.offline_gui_fixture import offline_legacy_viewer
 
 import pytest
 
@@ -15,8 +15,7 @@ from lsbpipe.gui.survey_explorer import SurveyExplorer
 def offline_explorer(qtbot):
     # Patch the only auto navigation path, before building the window.
     # The real Qt widgets and signals remain active in this test.
-    with patch.object(SurveyExplorer, "show_viewer", autospec=True,
-                      return_value=None):
+    with offline_legacy_viewer():
         window = SurveyExplorer()
     qtbot.addWidget(window)
     window.show()

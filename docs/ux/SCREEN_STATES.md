@@ -24,9 +24,9 @@ display scaling on a real Windows session when available.
 
 ## P0 capture semantics
 `capture_gui_baseline.py` disables automatic hosted Viewer navigation by
-temporarily overriding `show_viewer` **only in the capture process**.
+temporarily substituting the WebEngine widget with a blank QWidget\nand overriding `show_viewer` **only in the capture process**.
 It does NOT download data, establish internet or viewer availability,
-or display genuine survey tiles. The resulting blank WebEngine viewport
+or display genuine survey tiles. The resulting offline placeholder viewport
 must be labeled as an offline placeholder. No data assertions are inferred
 from this screenshot.
 

@@ -37,7 +37,8 @@ jobs:
         run: python -m pytest -q tests --ignore=tests/gui
       - name: Offline GUI smoke tests
         run: python -m pytest -q tests/gui
-      - name: Capture GUI baseline (remote Viewer deliberately blank)
+      - name: Capture GUI baseline (remote Viewer substituted offline)
+        if: always()
         run: python scripts/capture_gui_baseline.py --output-dir gui-artifacts
       - name: Publish screenshot evidence
         if: always()

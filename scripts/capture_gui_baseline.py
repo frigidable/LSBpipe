@@ -10,7 +10,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
+from offline_gui_fixture import offline_legacy_viewer
 
 # Intentional: this is a deterministic noninteractive CI capture, NOT a
 # replacement for real Windows/on-device Qt WebEngine validation.
@@ -107,8 +107,7 @@ def main():
     app = QApplication.instance() or QApplication([])
     # No Viewer navigation or archive activity from this controlled
     # capture process. The application source itself is NOT modified.
-    with patch.object(SurveyExplorer, "show_viewer", autospec=True,
-                      return_value=None):
+    with offline_legacy_viewer():
         window = SurveyExplorer()
         try:
             reports = [_capture(window, app, outdir, w, h) for w, h in SIZES]

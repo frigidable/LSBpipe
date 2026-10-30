@@ -36,16 +36,16 @@ P0 / usability:
    important diagnostic states may be lost among transient messages.
 4. Critical scientific distinctions are mostly long paragraphs/tooltips
    rather than contextual, semantically distinct status treatments.
-5. Network, archive discovery and view navigation are adjacent in
+5. The `SurveyExplorer.width` field shadows `QWidget.width()`; UI tests must use `window.size().width()` until a dedicated refactor can rename it safely.\n6. Network, archive discovery and view navigation are adjacent in
    `SurveyExplorer`, making independent UI state testing harder.
 
 P1 / engineering:
-6. The main GUI class couples widget construction, callbacks, network
+7. The main GUI class couples widget construction, callbacks, network
    orchestration and response formatting; targeted refactoring should
    reduce the UI-only regression surface.
-7. There is no reproducible screenshot coverage in CI, so visual
+8. There is no reproducible screenshot coverage in CI, so visual
    regressions are not represented in ordinary test results.
-8. WebEngine load success is not evidence that tiles rendered or that a
+9. WebEngine load success is not evidence that tiles rendered or that a
    particular release has complete coverage.
 
 ## Do not infer
