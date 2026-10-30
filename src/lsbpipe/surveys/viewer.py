@@ -38,7 +38,8 @@ def viewer_layer(release: str, region: str | None = None) -> str:
 
 def viewer_url(field: SkyField, *, release: str = "dr9",
                region: str | None = None, zoom: int = 13,
-               mark_target: bool = True) -> str:
+               mark_target: bool = True,
+               view: str = "image") -> str:
     """Create an exact-coordinate launch URL to the *hosted* Legacy viewer.
 
     Zoom is a Leaflet integer zoom level and is not directly a field width in
@@ -47,6 +48,10 @@ def viewer_url(field: SkyField, *, release: str = "dr9",
     if not isinstance(zoom, int) or not 0 <= zoom <= 20:
         raise ValueError("zoom must be an integer from 0 to 20")
     layer = viewer_layer(release, region)
+    if view not in ("image", "model", "resid"):
+        raise ValueError("view must be image, model or resid")
+    if view != "image":
+        layer += "-" + view
     args = {"ra":format(field.ra_deg, ".7f"),
             "dec":format(field.dec_deg, ".7f"),
             "zoom":str(zoom), "layer":layer}
