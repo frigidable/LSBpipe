@@ -189,3 +189,46 @@ not require the DESI servers or remote Viewer.
 
 **Status:** code staged in Draft PR #4; local Windows visual and keyboard
 confirmation is required after CI. The science core is unchanged.
+
+## Native Legacy Viewer search-region outline — 2026-10-31
+
+Following a Windows screenshot of the redesigned left search controls, the
+requested default field and naming were refined:
+
+- The search field input now says **Search area · side length (arcmin)**,
+  rather than *Square field width*. This remains a **square** centered at
+  the typed ICRS RA/Dec and does not imply that the user's full screen FOV
+  is exactly the same angular width.
+- **5 arcmin** is the new GUI default; the existing scientific
+  `SkyField` range and default outside this GUI are unchanged.
+- The official hosted Legacy Survey Viewer supports the documented
+  `poly=` query parameter for persistent celestial annotations:
+  https://www.legacysurvey.org/svtips/
+  The GUI uses this native feature, not a Qt pixel-fixed rectangle,
+  JavaScript injection or an unverified Leaflet map reference.
+- The square boundary is calculated on a local ICRS tangent plane (TAN):
+  its four edges are sampled with 4 intervals each and the polygon is
+  explicitly closed before encoding in the URL. The source field width
+  determines the side length in arcminutes. RA wrap and pole geometry
+  are handled through 3D sky vectors.
+- The Viewer heading names the search boundary dimension
+  (`search area 5′ × 5′`), and the backend selects a **heuristic**
+  starting zoom proportional to `log2(5 arcmin / field width)`.
+  This is a visual navigation choice, not a guaranteed FOV or coverage
+  statement; the `poly` sky coordinates are authoritative.
+- Viewer Image/Model/Residual reload and **Show target / Find data**
+  retain the boundary. A brick-double-click preview can recenter
+  on the brick **without moving the original selected search area**.
+  Since the preview is offset, the old marker is suppressed rather
+  than falsely marking the brick center as the target.
+- The overlay is a requested *search box*, **not** a pixel coverage map,
+  usable-sky mask or adopted science aperture. DR9/DR11 and science
+  data handling are unchanged.
+
+Verification includes the official polygon URL, tangent-plane side
+coordinates, RA=0 wrapping, near-pole geometry, preserved API defaults,
+GUI 5′ default, map zoom and brick recenter invariants.
+
+Current status: changes in Draft PR #4, online Viewer rendering on the
+user's Windows computer pending final visual confirmation. CI checks
+are running.
