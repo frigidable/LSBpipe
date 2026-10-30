@@ -134,11 +134,18 @@ def compare_observation_backgrounds(
 
     Geometry is already defined in the observation's raster coordinates. The
     caller must obtain that geometry from the same observation WCS. Fitted
-    candidate provenance is not yet encoded in BackgroundCandidate (P0 gap).
+    candidate provenance is checked against observation grid, shape and band.
     """
     from .mask_engine import MaskEngine
     from .scene import Operation
     mask = MaskEngine(scene).evaluate(observation, Operation.PHOTOMETRY)
+    for name, candidate in backgrounds.items():
+        if isinstance(candidate, BackgroundCandidate) and (
+            candidate.grid_id != scene.grid_id or
+            candidate.band != observation.band or
+            candidate.image_shape != observation.shape
+        ):
+            raise ValueError(f'Background candidate {name!r} source grid/band/shape mismatch')
     frame = MeasurementFrame(
         image=observation.image_nMgy,
         pixel_scale_arcsec=np.sqrt(observation.pixel_area_arcsec2),
