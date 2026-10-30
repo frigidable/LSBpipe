@@ -72,7 +72,20 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
         raise AssertionError(
             f"{state} viewer insufficient at {width}x{height}: "
             f"{viewer_share:.1%} (minimum 55%)")
+    visible_table_height = 0
     if state != "S0":
+        table_bounds = _bounds(window.files, window)
+        viewport_bounds = _bounds(window.data_scroll.viewport(), window)
+        visible_table_height = max(
+            0,
+            min(table_bounds["y"] + table_bounds["height"],
+                viewport_bounds["y"] + viewport_bounds["height"]) -
+            max(table_bounds["y"], viewport_bounds["y"]))
+        if visible_table_height < 105:
+            raise AssertionError(
+                f"{state} file-table viewport too small at "
+                f"{width}x{height}: {visible_table_height}px visible "
+                "(need table header and several files)")
         primary = _bounds(window.download_btn, window)
         if (not primary["visible"] or primary["y"] < 0 or
                 primary["y"] + primary["height"] > height):
@@ -82,6 +95,7 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
     report = {
         "state": state + "_offline_synthetic",
         "viewer_width_fraction": round(viewer_share, 4),
+        "visible_file_table_height_px": visible_table_height,
         "capture_font_family": QFontInfo(app.font()).family(),
         "font_catalog_families": QFontDatabase.families()[:40],
         "size_requested_logical": [width, height],
