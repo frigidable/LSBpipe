@@ -1,0 +1,43 @@
+name: Survey Explorer tests
+
+on:
+  push:
+    branches:
+      - feature/survey-explorer-v04
+  pull_request:
+    paths:
+      - "src/lsbpipe/surveys/**"
+      - "src/lsbpipe/gui/**"
+      - "tests/test_survey_*.py"
+      - "pyproject.toml"
+      - ".github/workflows/survey-tests.yml"
+
+jobs:
+  science-core:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install scientific tests
+        run: python -m pip install -e ".[exact,test]"
+      - name: Run complete offline test suite
+        run: python -m pytest -q
+
+  gui-import:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install GUI optional dependencies
+        run: python -m pip install -e ".[gui]"
+      - name: Verify GUI import without launching a display
+        run: python -c "from lsbpipe.gui.survey_explorer import SurveyExplorer; print(SurveyExplorer.__name__)"
