@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QHeaderView)
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage
 
 from lsbpipe.surveys.legacy import (
     SkyField, build_manifest, discover_bricks, save_manifest)
@@ -180,6 +181,18 @@ def _serve_aladin_page():
     return server, thread, QUrl(f'http://127.0.0.1:{server.server_address[1]}/')
 
 
+class _DiagnosticWebPage(QWebEnginePage):
+    """Collect WebEngine JavaScript console output for on-device diagnostics."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.recent_console = []
+
+    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
+        self.recent_console.append(
+            f"{str(level)}: {message} ({source_id}:{line_number})")
+        del self.recent_console[:-20]
+
+
 class TaskWorker(QObject):
     completed = Signal(object)
     progress = Signal(object)
@@ -254,6 +267,11 @@ class SurveyExplorer(QMainWindow):
         self.diagnostic_btn = QPushButton("Aladin diagnostics")
         self.diagnostic_btn.clicked.connect(self.show_map_diagnostics)
         actions.addWidget(self.diagnostic_btn)
+        self.external_btn = QPushButton("Aladin in browser")
+        self.external_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl("https://aladin.cds.unistra.fr/AladinLite/")))
+        actions.addWidget(self.external_btn)
         form.addRow(actions)
         panel.addWidget(target_box)
 
@@ -297,6 +315,7 @@ class SurveyExplorer(QMainWindow):
         panel.addWidget(self.message)
 
         self.sky = QWebEngineView()
+        self.sky.setPage(_DiagnosticWebPage(self.sky))
         self._aladin_server, self._aladin_thread, local_url = _serve_aladin_page()
         self.sky.loadFinished.connect(self._on_map_page_loaded)
         self.sky.load(local_url)
@@ -341,15 +360,54 @@ class SurveyExplorer(QMainWindow):
         self.sky.page().runJavaScript(script)
 
     def show_map_diagnostics(self):
-        """On-demand diagnostics without conflating HTML load and WASM readiness."""
-        def done(values):
-            if not isinstance(values, dict):
-                values = {'status':'JavaScript bridge unavailable'}
-            lines = [f'{key}: {value}' for key, value in values.items()]
-            QMessageBox.information(self, "Aladin Lite diagnostics", "\n".join(lines))
-        self.sky.page().runJavaScript(
-            "typeof window.lsbDiagnostics === 'function' "
-            "? window.lsbDiagnostics() : {status:'HTML bootstrap unavailable'}", done)
+        """Retrieve JSON as a string, preserving visibility when the bridge fails.
+
+        QWebEngine's result may be null while navigating; this is not proof
+        that the original inline JavaScript failed to execute.
+        """
+        url = self.sky.url().toString()
+        console = list(getattr(self.sky.page(), 'recent_console', []))
+        probe = """(function() {
+            try {
+                var element = document.getElementById('notice');
+                return JSON.stringify({
+                    page: location.href,
+                    documentReady: document.readyState,
+                    bridgeType: typeof window.lsbDiagnostics,
+                    stage: window.lsbStage || null,
+                    scriptType: typeof window.A,
+                    viewerReady: !!window.lsbAladin,
+                    onPageNotice: element ? element.textContent : null,
+                    scripts: Array.from(document.scripts).map(
+                        function(s) {return s.src || '[inline]';}).slice(-8),
+                    webgl2: (function() {
+                        try {return !!document.createElement('canvas').getContext('webgl2');}
+                        catch(e) {return String(e);}
+                    })()
+                });
+            } catch(e) {
+                return JSON.stringify({javascriptException:String(e)});
+            }
+        })()"""
+        def done(payload):
+            lines = [f"Qt WebEngine URL: {url}"]
+            if isinstance(payload, str):
+                try:
+                    details = json.loads(payload)
+                    lines += [f"{key}: {value}" for key, value in details.items()]
+                except (ValueError, TypeError):
+                    lines.append(f"JavaScript returned non-JSON string: {payload[:400]}")
+            else:
+                lines.append(f"JavaScript returned {type(payload).__name__}: {payload!r}")
+                lines.append("This result may occur during navigation or a stalled renderer.")
+            if console:
+                lines.append("")
+                lines.append("Recent JavaScript console entries:")
+                lines.extend(console[-10:])
+            else:
+                lines.append("JavaScript console: no messages captured")
+            QMessageBox.information(self, "Aladin Lite diagnostics", "\\n".join(lines))
+        self.sky.page().runJavaScript(probe, done)
 
     def use_map_center(self):
         def done(values):
