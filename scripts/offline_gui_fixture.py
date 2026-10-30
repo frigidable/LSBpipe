@@ -71,7 +71,7 @@ def make_offline_catalog():
     or source FITS are represented by this dataset.
     """
     from lsbpipe.surveys.legacy import BrickHit, SkyField, build_manifest
-    field = SkyField(154.7709, 46.4537, 15.)
+    field = SkyField(154.7709, 46.4537, 5.)
     names = ("1544p465", "1546p462", "1548p465", "1549p462")
     hits = []
     for release in ("dr9", "dr11"):
