@@ -44,9 +44,37 @@ def test_window_resizes_without_losing_core_widgets(offline_explorer, qtbot, wid
     assert window.sky.isVisible()
     assert window.bricks.isVisible()
     assert not window.data_drawer.isVisible()
-    assert window.sky.width() >= width * 0.55
-    assert window.size().width() == width
-    assert window.size().height() == height
+    actual = window.size()
+    screen = window.screen()
+    assert screen is not None
+    available = screen.availableGeometry()
+
+    # A live Windows test runs on a physical display. At 150% scaling,
+    # a 1920x1080 *logical* request needs 2880x1620 physical pixels and
+    # the window manager can legitimately cap the window to the screen.
+    # Offscreen CI, not a user's physical monitor, verifies all three
+    # *exact* requested capture dimensions via capture_gui_baseline.py.
+    frame = window.frameGeometry()
+    client = window.geometry()
+    decoration_w = max(0, frame.width() - client.width())
+    decoration_h = max(0, frame.height() - client.height())
+    can_fit = (
+        width + decoration_w <= available.width() and
+        height + decoration_h <= available.height()
+    )
+    if can_fit:
+        assert actual.width() == width
+        assert actual.height() == height
+    else:
+        # The OS may clamp to visible desktop geometry. This is not a
+        # regression in our adaptive Qt layouts.
+        assert 0 < actual.width() <= width
+        assert 0 < actual.height() <= height
+        assert actual.width() >= min(width, available.width()) - 80
+        assert actual.height() >= min(height, available.height()) - 80
+
+    # The scientific preview must dominate the *actual* visible window.
+    assert window.sky.width() >= actual.width() * 0.55
 
 
 def test_filtering_does_not_silently_deselect_hidden_files(offline_explorer):
