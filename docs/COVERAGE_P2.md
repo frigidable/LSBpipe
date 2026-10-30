@@ -23,7 +23,7 @@ python -m lsbpipe.gui
 
 Use **DR9 only** for the initial test at
 RA=154.7709°, Dec=46.4537°; four intersecting north bricks were actually
-discovered on Windows. Choose one brick from the list (e.g., `1544p465`),
+discovered on Windows. Choose the brick around the requested target (for this field, start with `1548p465`),
 and download exactly these four science products **in a single band**:
 
 - `image-r.fits.fz`
@@ -47,14 +47,14 @@ After downloading, select the same brick in the upper table, specify a
 circular target radius and a separate sky annulus, and click
 **Inspect local FITS**. Pick `r` and the **root download directory**
 (the folder containing `dr9/north/coadd/...`). The report appears in a
-dialog and is saved to `coverage-reports/dr9_north_1544p465_r.json`.
+dialog and is saved to `coverage-reports/dr9_north_1548p465_r.json`.
 
 For reproducibility, the same test is available without Qt:
 
 ```powershell
 python -m lsbpipe.surveys inspect-coverage `
   --directory C:\LSBpipeData --release dr9 --region north `
-  --brick 1544p465 --band r `
+  --brick 1548p465 --band r `
   --ra 154.7709 --dec 46.4537 `
   --target-radius 60 --sky-inner 90 --sky-outer 180 `
   --output C:\LSBpipeData\coverage-reports\pilot-r.json
