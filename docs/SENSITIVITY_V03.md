@@ -42,7 +42,7 @@ The `compare_observation_backgrounds` adapter uses `MaskEngine(scene).evaluate(o
 
 - Differences between deterministic candidate sky maps are **sensitivity diagnostics**, not confidence intervals, background posterior distributions or an error budget.
 - A flat and a tilted sky model fitted to the same pixels are **correlated** alternatives, not independent random perturbations. Correlated coadd noise and bias from galaxy emission leaking into sky training regions are not characterized here.
-- As of P0c, `BackgroundCandidate` does **not** record its source `grid_id` or band. The adapter verifies the *observation and scene*, but **cannot itself establish that an arbitrary supplied candidate was fitted on this grid**. Until that provenance is added, researchers must provide candidates from the same source scene and image. This needs closing before scientific adoption.
+- `BackgroundCandidate` now records source `grid_id`, `band` and `image_shape` for candidates obtained from `fit_residual_background` / `fit_observation_background`. The observation adapter **fails closed** on a fitted candidate with missing or mismatched provenance, even when the array shape is the same. Raw scalar/array backgrounds remain researcher-supplied and cannot be independently authenticated.
 - `ReferenceGeometry` is pixel-space. Sky-PA conversion and reference frame identity must be maintained explicitly by the caller.
 - `R_50` and Sérsic `R_e` are distinct quantities; this P0c PR does not infer an effective radius from potentially nonmonotonic curves of growth.
 - Inverse variance in v0.2 supplies only diagonal pixel noise. The systematic envelope among these candidates is not a statistical sky covariance estimate.
@@ -50,8 +50,8 @@ The `compare_observation_backgrounds` adapter uses `MaskEngine(scene).evaluate(o
 
 ## Verification
 
-Nine new tests cover a constant background with masked area, a tilted plane with asymmetric masks and image-footprint truncation, signed negative annular flux / nonmonotonic COG, completely masked annuli, replacement rather than additive semantics, failed/invalid candidate maps, preservation of rejected holdout status, WCS/band/observation-mask checking, and exact Photutils fractional pixel geometry.
+Ten new tests cover a constant background with masked area, a tilted plane with asymmetric masks and image-footprint truncation, signed negative annular flux / nonmonotonic COG, completely masked annuli, replacement rather than additive semantics, failed/invalid candidate maps, preservation of rejected holdout status, WCS/band/observation-mask checking, and exact Photutils fractional pixel geometry.
 
-In the local runtime: **76 passed, 2 skipped** (one Astropy integration test module and the Photutils-only exact test). The previous user-verified Windows baseline is **72 passed** at P0b. Full P0c Windows validation is outstanding; with both dependencies installed, **81 passed** is expected if the new exact-backend test succeeds.
+In the local runtime: **77 passed, 2 skipped** (one Astropy integration test module and the Photutils-only exact test). The previous user-verified Windows baseline is **72 passed** at P0b. Full P0c Windows validation is outstanding; with both dependencies installed, **82 passed** is expected if the new exact-backend test succeeds. The additional test covers fitted-background provenance and wrong-grid rejection.
 
 No real coadd or independent injection–recovery science validation has been performed.
