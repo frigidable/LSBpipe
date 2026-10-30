@@ -197,3 +197,39 @@ def test_nexp_column_is_prioritized_and_qa_starts_collapsed(offline_explorer):
     assert window.bricks.horizontalHeaderItem(3).text() == "NEXP g/r/i/z"
     assert not window.qa_widget.isVisible()
     assert window.files.minimumHeight() >= 148
+
+
+def test_science_inspector_docks_to_right_of_remote_viewer(offline_explorer, qtbot):
+    from PySide6.QtCore import Qt, QPoint
+    window = offline_explorer
+    assert window.dockWidgetArea(window.data_drawer) == Qt.RightDockWidgetArea
+    apply_offline_state(window, "S1")
+    qtbot.wait(40)
+    assert window.data_drawer.isVisible()
+    assert window.files.columnCount() == 4
+    assert window.files.horizontalHeaderItem(1).text() == "Product / provenance"
+    assert window.files.horizontalHeaderItem(2).text() == "HTTP"
+    assert window.files.rowCount() == 88
+    inspector_x = window.data_drawer.mapTo(window, QPoint(0, 0)).x()
+    preview_x = window.sky.mapTo(window, QPoint(0, 0)).x()
+    assert inspector_x > preview_x
+    assert window.sky.width() >= window.width() * 0.55
+
+
+def test_http_status_abbreviations_keep_original_evidence(offline_explorer):
+    window = offline_explorer
+    apply_offline_state(window, "S1")
+    row = 0
+    first = window.manifest["products"][row]
+    item = window.files.item(row, 1)
+    assert first["brick"] in item.text()
+    assert first["release"].upper() in item.text()
+    assert first["kind"] in item.text()
+    assert first["relative_path"] in item.toolTip()
+    assert window.files.item(row, 2).text() == "?"
+    r = {first["relative_path"]: {
+        "evidence": "HTTP_OK", "size_bytes": 1048576}}
+    window._receive_verification(r)
+    assert window.files.item(row, 2).text() == "OK"
+    assert window.files.item(row, 3).text() == "1"
+    assert first["relative_path"] in window.files.item(row, 2).toolTip()
