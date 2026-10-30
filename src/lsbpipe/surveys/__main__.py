@@ -25,6 +25,19 @@ def main(argv=None):
     get = sub.add_parser("download", help="download manifest product URLs to a local directory")
     get.add_argument("--manifest", type=Path, required=True)
     get.add_argument("--directory", type=Path, required=True)
+    check = sub.add_parser("inspect-coverage",
+        help="evaluate target and sky-annulus pixel coverage in a downloaded brick")
+    check.add_argument("--directory", type=Path, required=True)
+    check.add_argument("--release", choices=("dr9", "dr10", "dr11"), required=True)
+    check.add_argument("--region", choices=("north", "south"), required=True)
+    check.add_argument("--brick", required=True)
+    check.add_argument("--band", choices=("g", "r", "i", "z"), required=True)
+    check.add_argument("--ra", type=float, required=True)
+    check.add_argument("--dec", type=float, required=True)
+    check.add_argument("--target-radius", type=float, required=True)
+    check.add_argument("--sky-inner", type=float, required=True)
+    check.add_argument("--sky-outer", type=float, required=True)
+    check.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
     if args.action == "discover":
@@ -51,6 +64,24 @@ def main(argv=None):
         print(f"{successes}/{len(report['results'])} completed; report at {args.directory / 'download-report.json'}")
         if not report["complete"]:
             return 1
+    elif args.action == "inspect-coverage":
+        from .coverage import inspect_local_brick, save_coverage
+        report = inspect_local_brick(
+            args.directory,release=args.release,region=args.region,
+            brick=args.brick,band=args.band,
+            ra_deg=args.ra,dec_deg=args.dec,
+            target_radius_arcsec=args.target_radius,
+            sky_inner_arcsec=args.sky_inner,
+            sky_outer_arcsec=args.sky_outer)
+        save_coverage(report,args.output)
+        print("Status:", report.status)
+        for area in report.regions:
+            print(f"{area.label}: sampled={area.pixel_centers_sampled}, "
+                  f"usable={area.usable_fraction}, "
+                  f"footprint_approx={area.estimated_footprint_fraction}")
+        if report.warnings:
+            print("Warnings:", "; ".join(report.warnings))
+        print("Report:", args.output)
     return 0
 
 
