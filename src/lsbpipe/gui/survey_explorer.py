@@ -562,7 +562,8 @@ class SurveyExplorer(QMainWindow):
         target = overlay_field or self._field()
         selected_row = self.bricks.currentRow()
         active = (self.hits[selected_row]
-                  if 0 <= selected_row < len(self.hits) else None)
+                  if self.bricks.selectedItems() and
+                     0 <= selected_row < len(self.hits) else None)
         return viewer_url(field or self._field(), release=release,
                           region=region, view=self.view_mode.currentData(),
                           zoom=suggested_zoom(target), mark_target=mark_target,
