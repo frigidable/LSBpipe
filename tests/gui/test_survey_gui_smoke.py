@@ -407,7 +407,9 @@ def test_brick_preview_preserves_target_overlay(offline_explorer, qtbot):
     assert isinstance(sent, QUrl)
     params = parse_qs(urlparse(sent.toString()).query)
     assert params["poly"][0].split(";")[0] == field_polygon_query(target)
-    assert len(params["poly"][0].split(";")) >= 2
+    # The embedded page keeps only the target polygon in the URL;
+    # full brick outlines use the live Leaflet layer to avoid auto-zoom.
+    assert len(params["poly"][0].split(";")) == 1
     assert "mark" not in params
 
 
