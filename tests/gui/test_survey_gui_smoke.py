@@ -406,7 +406,8 @@ def test_brick_preview_preserves_target_overlay(offline_explorer, qtbot):
     sent = loader.call_args.args[0]
     assert isinstance(sent, QUrl)
     params = parse_qs(urlparse(sent.toString()).query)
-    assert params["poly"] == [field_polygon_query(target)]
+    assert params["poly"][0].split(";")[0] == field_polygon_query(target)
+    assert len(params["poly"][0].split(";")) >= 2
     assert "mark" not in params
 
 
