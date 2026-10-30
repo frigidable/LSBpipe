@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lsbpipe-prototype"
+version = "0.2.0"
+description = "FITS ingestion and local celestial-WCS photometry prototype"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.optional-dependencies]
+astro = ["astropy>=6.0"]
+exact = ["astropy>=6.0", "photutils>=2.0"]
+demo = ["matplotlib"]
+test = ["pytest"]
+
+[project.scripts]
+lsbpipe = "lsbpipe.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.pytest-tmp"

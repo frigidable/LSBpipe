@@ -1,0 +1,47 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+.pytest-tmp/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Scientific data
+*.fits
+*.fit
+*.fts
+*.fits.gz
+*.fz
+*.npy
+*.npz
+
+# Generated products
+demo_output/
+outputs/
+runs/
+cache/
+*.log
+*.zip
+
+# Local data
+data/
+inputs/
+
+# Secrets
+.env
+.env.*
+*.key
+
+# Editor
+.vscode/
+.idea/
+demo_output_v02/
+validation_output/
