@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
 from PySide6.QtCore import QPoint
+from PySide6.QtGui import QFont, QFontInfo
 from PySide6.QtWidgets import QApplication, QGroupBox, QTableWidget
 
 from lsbpipe.gui.survey_explorer import SurveyExplorer
@@ -63,6 +64,7 @@ def _capture(window, app, outdir: Path, width: int, height: int):
     }
     report = {
         "state": "S0_empty_offline",
+        "capture_font_family": QFontInfo(app.font()).family(),
         "size_requested_logical": [width, height],
         "screenshot": screenshot.name,
         "screenshot_px": [pixmap.width(), pixmap.height()],
@@ -105,6 +107,9 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     app = QApplication.instance() or QApplication([])
+    # Windows runner offscreen font fallback has rendered missing-glyph boxes.
+    # Try an installed system UI font; record the resolved font in metadata.
+    app.setFont(QFont("Segoe UI", 10))
     # No Viewer navigation or archive activity from this controlled
     # capture process. The application source itself is NOT modified.
     with offline_legacy_viewer():
