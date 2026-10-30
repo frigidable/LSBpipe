@@ -259,3 +259,88 @@ def test_release_labels_are_unclipped_on_compact_navigation(offline_explorer, qt
         labels.append((pos.x(), pos.x() + box.width()))
     assert labels[0][1] <= labels[1][0]
     assert labels[1][1] <= labels[2][0]
+
+
+def test_target_entry_is_real_pasteable_text_not_spinboxes(offline_explorer, qtbot):
+    from PySide6.QtWidgets import QApplication, QLineEdit, QDoubleSpinBox
+    from PySide6.QtCore import Qt
+    from lsbpipe.gui.target_input import parse_ra_deg
+
+    window = offline_explorer
+    for widget in (window.ra, window.dec, window.field_width):
+        assert isinstance(widget, QLineEdit)
+        assert not isinstance(widget, QDoubleSpinBox)
+        assert widget.isVisible()
+        assert widget.isEnabled()
+
+    clipboard = QApplication.clipboard()
+    previous = clipboard.text()
+    try:
+        clipboard.setText("10:19:05")
+        window.ra.setFocus()
+        window.ra.selectAll()
+        qtbot.keyClick(window.ra, Qt.Key_V, modifier=Qt.ControlModifier)
+        assert window.ra.text() == "10:19:05"
+        assert window.ra.value() == pytest.approx(parse_ra_deg("10:19:05"))
+        window.dec.setText("46,4537")
+        window.field_width.setText("0.25 deg")
+        field = window._field()
+        assert field.ra_deg == pytest.approx(parse_ra_deg("10:19:05"))
+        assert field.dec_deg == pytest.approx(46.4537)
+        assert field.width_arcmin == pytest.approx(15)
+    finally:
+        clipboard.setText(previous)
+
+
+def test_coordinate_pair_button_pastes_both_fields_and_preserves_width(offline_explorer):
+    from PySide6.QtWidgets import QApplication
+    window = offline_explorer
+    clip = QApplication.clipboard()
+    previous = clip.text()
+    try:
+        window.field_width.setText("900 arcsec")
+        clip.setText("154,7709 46,4537")
+        window.paste_target_btn.click()
+        assert window.ra.value() == pytest.approx(154.7709)
+        assert window.dec.value() == pytest.approx(46.4537)
+        assert window.field_width.value() == pytest.approx(15)
+        assert "Pasted ICRS" in window.target_hint.text()
+    finally:
+        clip.setText(previous)
+
+
+def test_invalid_coordinate_blocks_archive_search_without_clamping(
+        offline_explorer, qtbot):
+    from unittest.mock import patch
+    from PySide6.QtWidgets import QMessageBox
+    window = offline_explorer
+    window.ra.setText("361")
+    with patch.object(QMessageBox, "warning") as warning, \
+            patch.object(window, "_start") as start:
+        window.search()
+    assert warning.call_count == 1
+    assert "RA" in warning.call_args.args[2]
+    start.assert_not_called()
+    assert window.ra.text() == "361"  # no QDoubleSpinBox clamping
+    assert window.ra.property("invalid") is True
+    window.ra.setFocus()
+    qtbot.keyClicks(window.ra, "0")
+    window.ra.setText("154.7709")
+    assert window._field().ra_deg == pytest.approx(154.7709)
+
+
+def test_invalid_pair_paste_does_not_partially_overwrite_inputs(offline_explorer):
+    from unittest.mock import patch
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    window = offline_explorer
+    original = (window.ra.text(), window.dec.text())
+    clip = QApplication.clipboard()
+    previous = clip.text()
+    try:
+        clip.setText("154.7709 99")
+        with patch.object(QMessageBox, "warning") as warning:
+            window.paste_coordinate_pair()
+        warning.assert_called_once()
+        assert (window.ra.text(), window.dec.text()) == original
+    finally:
+        clip.setText(previous)
