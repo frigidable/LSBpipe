@@ -87,6 +87,8 @@ class TargetTextField(QLineEdit):
         self._clear_invalid()
 
     def _mark_invalid(self, reason: str):
+        if not self.property("invalid"):
+            self._normal_tooltip = self.toolTip()
         self.setProperty("invalid", True)
         self.setToolTip(reason)
         self._refresh_style()
@@ -94,6 +96,7 @@ class TargetTextField(QLineEdit):
     def _clear_invalid(self, *_):
         if self.property("invalid"):
             self.setProperty("invalid", False)
+            self.setToolTip(getattr(self, "_normal_tooltip", ""))
             self._refresh_style()
 
     def _refresh_style(self):
