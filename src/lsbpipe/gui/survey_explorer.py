@@ -475,7 +475,7 @@ class SurveyExplorer(QMainWindow):
         report = summarize_selection(self.manifest["products"], selected)
         visible = sum(not self.files.isRowHidden(row)
                       for row in range(self.files.rowCount()))
-        sizes = (f"≥ {report.known_mib:.1f} MiB known"
+        sizes = (f"{report.known_mib:.1f} MiB confirmed + unknown"
                  if report.unknown_size_files else
                  f"{report.known_mib:.1f} MiB")
         self.selected_label.setText(
@@ -547,11 +547,11 @@ class SurveyExplorer(QMainWindow):
                   (f" + {report.unknown_size_files} unknown-sized files."
                    if report.unknown_size_files else "."))
         text = (
-            f"Download {report.selected_files} science products?\\n"
+            f"Download {report.selected_files} science products?\n"
             f"{report.verified_files} HTTP OK, "
             f"{report.missing_files} confirmed missing, "
-            f"{report.unknown_files} not verified.\\n"
-            f"{amount}\\n\\n"
+            f"{report.unknown_files} not verified.\n"
+            f"{amount}\n\n"
             "These are original FITS products and can occupy significant disk space.")
         if QMessageBox.question(
                 self, "Confirm science download", text,
