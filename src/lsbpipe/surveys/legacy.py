@@ -275,8 +275,22 @@ def build_manifest(field: SkyField, hits: Iterable[BrickHit],
                 if product.relative_path not in seen:
                     products.append(product)
                     seen.add(product.relative_path)
+    # Keep each archive release. DR11 north re-reduces historical DR9 input
+    # observations, but distinct FITS products must not be silently collapsed.
+    footprints = {}
+    for hit in selected:
+        footprints.setdefault((hit.region, hit.name), set()).add(hit.release)
+    shared_inputs = [
+        {"region": region, "brick": brick,
+         "releases": sorted(releases),
+         "relation": "SHARED_HISTORICAL_INPUT_OBSERVATIONS_NOT_IDENTICAL_PRODUCTS"}
+        for (region, brick), releases in sorted(footprints.items())
+        if region == "north" and {"dr9", "dr11"}.issubset(releases)
+    ]
     return {
         "schema": "lsbpipe.legacy-download/0.1",
+        "unique_spatial_bricks": len(footprints),
+        "related_release_groups": shared_inputs,
         "field": asdict(field),
         "brick_count": len(selected),
         "bricks": [asdict(h) for h in selected],
@@ -287,6 +301,7 @@ def build_manifest(field: SkyField, hits: Iterable[BrickHit],
             "Product URL existence requires an explicit HEAD check or download",
             "Actual per-pixel coverage requires downloaded NEXP/INVVAR maps",
             "Selection uses a conservative sky bounding box, not exact spherical polygon intersection",
+            "Northern DR9 and DR11 reuse observational input, but may have distinct reduction products; do not automatically deduplicate",
         ],
     }
 
