@@ -75,7 +75,7 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
             f"{state} viewer insufficient at {width}x{height}: "
             f"{viewer_share:.1%} (minimum 55%)")
     visible_table_height = 0
-    if state not in ("S0", "S4", "S5"):
+    if state not in ("S0", "S4", "S5", "S6"):
         table_bounds = _bounds(window.files, window)
         viewport_bounds = _bounds(window.data_scroll.viewport(), window)
         visible_table_height = max(
@@ -94,13 +94,20 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
             raise AssertionError(
                 f"{state} Download selected action is not reachable "
                 f"within the {width}x{height} window: {primary}")
-    if state in ("S4", "S5"):
+    if state in ("S4", "S5", "S6"):
         if window.inspector_tabs.currentWidget() is not window.science_qa:
             raise AssertionError("S4 Science QA tab not selected")
         if not window.science_qa.result.isVisible():
             raise AssertionError("S4 Science QA result text clipped/hidden")
-        if not window.science_qa.buttons["square"].isVisible():
-            raise AssertionError("S4 Science QA square action unreachable")
+        expected = "compare" if state == "S6" else "square"
+        if not window.science_qa.buttons[expected].isVisible():
+            raise AssertionError(
+                f"{state} Science QA action {expected!r} unreachable")
+        if state == "S6" and (
+                not window.science_qa.north_directory.isVisible() or
+                not window.science_qa.south_directory.isVisible()):
+            raise AssertionError(
+                "S6 separate original North/South input fields are hidden")
     if state == "S5":
         if window.preview_tabs.currentWidget() is not window.fits_explorer:
             raise AssertionError("S5 native FITS Explorer is not visible")
@@ -182,7 +189,7 @@ def main():
     # Fresh widget instance for every state: no inadvertent selection/resize
     # carryover between screenshots, but all components are real Qt widgets.
     with offline_legacy_viewer():
-        for state in ("S0", "S1", "S2", "S3", "S4", "S5"):
+        for state in ("S0", "S1", "S2", "S3", "S4", "S5", "S6"):
             window = SurveyExplorer()
             try:
                 # Exercise the populated-state transition AFTER Qt has shown
@@ -204,8 +211,8 @@ def main():
         "screens": reports,
         "limitations": [
             "WebEngine intentionally replaced by a blank local offline placeholder",
-            "All catalog and product S1–S5 data are synthetic fixtures",
-            "S4 and S5 are mock UI content; no original FITS are opened",
+            "All catalog and product S1–S6 data are synthetic fixtures",
+            "S4–S6 are mock UI content; no original FITS are opened",
             "S5 FITS raster is artificial and cannot support scientific conclusions",
             "Offscreen Qt capture cannot verify real monitor / DPI rendering",
             "This job does not certify accessibility or scientific validity",
