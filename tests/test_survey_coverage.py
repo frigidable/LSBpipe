@@ -193,3 +193,54 @@ def test_optical_mask_must_use_hdu1_not_wise_extension():
             fits.ImageHDU(data=image, header=w.to_header())]) as hdul:
         with pytest.raises(ValueError,match="Optical MASKBITS HDU1"):
             _science_hdu_index(hdul, "maskbits")
+
+
+
+def test_sga_galaxy_bit_retained_as_target_signal_with_audited_counts():
+    """SGA footprint is not a bad-pixel flag: don't lose the galaxy light."""
+    w, image, ivar, nexp, maskbits = fixture_arrays()
+    target_px = (35, 37)  # within the target circle
+    sky_px = (20, 37)     # within the sky ring (12–20 arcsec)
+    maskbits[target_px] |= (1 << 12)  # SGA GALAXY
+    maskbits[sky_px] |= (1 << 11)    # MEDIUM bright star warning
+    maskbits[sky_px] |= (1 << 0)     # outside BRICK_PRIMARY
+    report = coverage_from_arrays(
+        image, ivar, nexp, maskbits, w, **args())
+    target, sky = report.regions
+    assert target.usable_fraction == 1.
+    assert target.maskbit_counts["GALAXY"] == 1
+    assert target.maskbit_fractions["GALAXY"] == pytest.approx(
+        1 / target.pixel_centers_sampled)
+    assert target.galaxy_warning_fraction == pytest.approx(
+        target.maskbit_fractions["GALAXY"])
+    assert target.maskbit_counts["BRIGHT"] == 0
+    assert "TARGET_SGA_GALAXY_BIT_PRESENT_DO_NOT_AUTOMASK" in report.warnings
+    assert sky.usable_fraction == 1.
+    assert sky.maskbit_counts["MEDIUM"] == 1
+    assert sky.maskbit_counts["NPRIMARY"] == 1
+    assert "SKY_ANNULUS_MEDIUM_WARNING" in report.warnings
+    assert "SKY_ANNULUS_NPRIMARY_WARNING" in report.warnings
+    assert sky.maskbit_counts["GALAXY"] == 0
+    for region in report.regions:
+        assert set(region.maskbit_counts) == {
+            "NPRIMARY", "BRIGHT", "MEDIUM", "GALAXY", "CLUSTER",
+            "BAILOUT", "SATUR_R", "ALLMASK_R"}
+        assert all(isinstance(v, int) for v in region.maskbit_counts.values())
+
+
+def test_band_specific_saturated_and_allmask_bits_counted_separately():
+    w, image, ivar, nexp, flags = fixture_arrays()
+    center = (35, 37)
+    flags[center] |= (1 << 3)   # SATUR_R
+    flags[center] |= (1 << 6)   # ALLMASK_R
+    flags[center] |= (1 << 12)  # SGA: *not* additional invalidity
+    report = coverage_from_arrays(
+        image, ivar, nexp, flags, w, **args())
+    target = report.regions[0]
+    assert target.maskbit_counts["SATUR_R"] == 1
+    assert target.maskbit_counts["ALLMASK_R"] == 1
+    assert target.maskbit_counts["GALAXY"] == 1
+    assert target.usable_pixels == target.pixel_centers_sampled - 1
+    assert "TARGET_INVALID_OR_MASKED_PIXELS" in report.warnings
+    assert target.usable_fraction == pytest.approx(
+        1 - 1 / target.pixel_centers_sampled)
