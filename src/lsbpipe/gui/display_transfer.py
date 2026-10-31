@@ -49,18 +49,26 @@ def display_range(data: np.ndarray, kind: str, *,
         raise ValueError("FITS display requires a 2D layer")
     if manual is not None:
         return manual[0], manual[1], mode
-    # Sample at a fixed flat-pixel stride BEFORE materializing a valid
-    # selection: avoids an extra multi-megabyte float64 copy during percentiles.
+    # A fixed stride aliases regular detector/stripe patterns (e.g. every
+    # fourth pixel), potentially omitting an entire flux population.
+    # Deterministic uniform pixel sampling avoids periodic stride bias while
+    # bounding temporary data to 250k samples, even for large FITS arrays.
     array = np.asarray(data)
-    stride = max(1, array.size // 250000)
-    sample = np.asarray(array.flat[::stride], dtype=np.float64)
+    if array.size <= 250_000:
+        sample = np.asarray(array, dtype=np.float64).ravel()
+    else:
+        indices = np.random.default_rng(1909).integers(
+            0, array.size, size=250_000)
+        sample = np.asarray(array.flat[indices], dtype=np.float64)
     finite = np.isfinite(sample)
     if kind == "invvar" or mode == "log":
         finite &= sample > 0
     if kind == "nexp":
         finite &= sample >= 0
     if not np.any(finite):
-        return 0., 1., mode
+        # A positive placeholder is required for the display-only log
+        # colorbar. No source pixels are fabricated or made valid.
+        return (1e-3, 1., mode) if mode == "log" else (0., 1., mode)
     sample = sample[finite]
     if kind == "nexp":
         return 0., max(float(np.max(sample)), 1.), mode
