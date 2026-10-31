@@ -1,14 +1,16 @@
 """Conservative, display-only pixel-quality classes for Legacy coadds.
 
-Quality class 1 marks catalog warnings, including possible target GALAXY:
-it does NOT remove them from instrumental validity or any science mask.
+Quality class 1 marks ALL nonzero non-hard MASKBITS flags (including
+catalog/source warnings and other-band flags). These do NOT automatically
+remove pixels from the current conservative per-band instrumental policy.
+Unrecognized/future bits are shown as warnings, never silently as clean.
 """
 import numpy as np
 from lsbpipe.survey import LEGACY_BITS, maskbits_to_uint
 
 QUALITY_PALETTE = np.asarray([
-    (42, 110, 88),    # 0 instrumentally acceptable, no named warning
-    (228, 179, 67),   # 1 BRIGHT/MEDIUM/GALAXY warning, still acceptable
+    (42, 110, 88),    # 0 numerically valid; MASKBITS == 0
+    (228, 179, 67),   # 1 other nonzero bits, not a hard per-band exclusion
     (220, 72, 67),    # 2 band-specific SATUR conservative exclusion
     (239, 125, 67),   # 3 band-specific ALLMASK conservative exclusion
     (209, 58, 209),   # 4 numerical invalid IMAGE/INVVAR/NEXP
@@ -25,9 +27,10 @@ def quality_classes(data: dict, band: str) -> np.ndarray:
     if bits.ndim != 2 or any(np.shape(data[key]) != bits.shape for key in required):
         raise ValueError("Quality inputs must share the same 2D pixel grid")
     classes = np.zeros(bits.shape, dtype=np.uint8)
-    warnings = np.uint32(sum(1 << LEGACY_BITS[k]
-                             for k in ("BRIGHT", "MEDIUM", "GALAXY")))
-    classes[(bits & warnings) != 0] = 1
+    # A pixel with NPRIMARY, BAILOUT, CLUSTER, another band's
+    # SATUR/ALLMASK, or an unknown future bit must not appear 'clean'.
+    # Only this *display category* changes; science validity stays separate.
+    classes[bits != 0] = 1
     classes[(bits & np.uint32(1 << LEGACY_BITS[
         "SATUR_" + band.upper()])) != 0] = 2
     classes[(bits & np.uint32(1 << LEGACY_BITS[
@@ -50,7 +53,7 @@ def quality_summary(data: dict, band: str) -> dict:
         "status": "DIAGNOSTIC_NOT_ADOPTED",
         "pixels": int(classes.size),
         "categories": dict(zip(
-            ("clean", "catalog_warning_not_excluded", "satur",
+            ("clean", "other_bit_not_excluded", "satur",
              "allmask", "bad_numeric"),
             (int(n) for n in counts),
         )),
