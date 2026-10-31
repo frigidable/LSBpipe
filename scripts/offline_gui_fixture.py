@@ -97,11 +97,21 @@ def apply_offline_state(window, state: str):
         window.kind_filter.setCurrentText("image")
         assert len(window._selected()) == 88  # filters never discard hidden selection
         return
-    if state == "S3":
+    if state in ("S3", "S4"):
         window.bricks.selectRow(0)
         with patch.object(gui.QInputDialog, "getItem", return_value=("r", True)):
             window.select_science_quartet()
         assert len(window._selected()) == 4
         window.brick_filter.setCurrentText(hits[0].name)
+        if state == "S4":
+            # Visual-only synthetic state: never claim original FITS loaded.
+            window.science_qa.directory.setText(
+                "C:/synthetic-placeholder/NOT_REAL_FITS")
+            window.science_qa.result.setPlainText(
+                "OFFLINE SYNTHETIC QA STATE — NO FITS OPENED\n"
+                "Selected DR9 north 1544p465, r band.\n"
+                "Use Check full search square, Locate mask footprints, "
+                "or Open four-layer FITS map with downloaded originals.")
+            window.inspector_tabs.setCurrentWidget(window.science_qa)
         return
     raise ValueError(f"Unknown offline state: {state}")
