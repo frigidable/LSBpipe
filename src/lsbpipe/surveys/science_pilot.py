@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 
@@ -73,6 +74,80 @@ def probe_science_quartet(manifest: dict) -> dict:
     return result
 
 
+
+def _matching_product_set(candidate: dict, current: dict) -> bool:
+    """Prior evidence is only reusable for the EXACT original quartet."""
+    if (candidate.get("schema") != current["schema"] or
+            candidate.get("field") != current["field"] or
+            candidate.get("pilot", {}).get("release") != current["pilot"]["release"] or
+            candidate.get("pilot", {}).get("region") != current["pilot"]["region"] or
+            candidate.get("pilot", {}).get("brick") != current["pilot"]["brick"] or
+            candidate.get("pilot", {}).get("band") != current["pilot"]["band"]):
+        return False
+    def identity(entry):
+        return (entry["relative_path"], entry["url"], entry["kind"],
+                entry["band"], entry["release"], entry["region"], entry["brick"])
+    try:
+        old = [identity(p) for p in candidate["products"]]
+        new = [identity(p) for p in current["products"]]
+    except (KeyError, TypeError, ValueError):
+        return False
+    return len(old) == len(new) == 4 and len(set(old)) == 4 and set(old) == set(new)
+
+
+def _prior_head_evidence(manifest: dict, root: Path) -> tuple[dict, str]:
+    """Restore a previously *recorded* HEAD result, never claim a new probe.
+
+    A dedicated pilot-probe.json is an audit snapshot. For pilots created
+    before its introduction, a prior checked pilot-manifest.json can be
+    used if it still exists. Invalid/mismatched prior evidence is ignored.
+    """
+    for filename in ("pilot-probe.json", "pilot-manifest.json"):
+        try:
+            previous = json.loads((root / filename).read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeError):
+            continue
+        if not isinstance(previous, dict) or not _matching_product_set(previous, manifest):
+            continue
+        by_path = {p["relative_path"]: p for p in previous["products"]}
+        if not any(p.get("evidence") != "UNVERIFIED_URL"
+                   for p in previous["products"]):
+            continue
+        result = json.loads(json.dumps(manifest))
+        for product in result["products"]:
+            prior = by_path[product["relative_path"]]
+            for key in ("evidence", "http_status", "size_bytes", "error"):
+                if key in prior:
+                    product[key] = prior[key]
+        timestamp = previous.get("pilot", {}).get("last_probed_at_utc")
+        if timestamp:
+            result["pilot"]["last_probed_at_utc"] = timestamp
+        result["pilot"]["status"] = "PREVIOUS_HEAD_EVIDENCE_NOT_RECHECKED"
+        return result, "PREVIOUS_RUN_NOT_RECHECKED"
+    return manifest, "NOT_CHECKED"
+
+
+def _prior_download_receipt(root: Path, field: SkyField,
+                            selected: set[str]) -> Path | None:
+    """Reference a matching local transfer receipt without trusting it as QA."""
+    source = root / "data" / "download-report.json"
+    try:
+        receipt = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return None
+    if not isinstance(receipt, dict):
+        return None
+    rows = receipt.get("results")
+    if (receipt.get("schema") != "lsbpipe.legacy-download-report/0.1" or
+            receipt.get("field") != asdict(field) or
+            not isinstance(rows, list) or len(rows) != 4):
+        return None
+    paths = [row.get("relative_path") for row in rows
+             if isinstance(row, dict)]
+    if len(paths) != 4 or set(paths) != selected:
+        return None
+    return source
+
 def run_science_pilot(
     field: SkyField, hits: list[BrickHit], *, release: str,
     region: str, brick: str, band: str, directory: Path,
@@ -92,6 +167,14 @@ def run_science_pilot(
         field, hits, release=release, region=region, brick=brick, band=band)
     if check_urls or download:
         manifest = probe_science_quartet(manifest)
+        manifest["pilot"]["last_probed_at_utc"] = (
+            datetime.now(timezone.utc).isoformat())
+        head_source = "CURRENT_RUN"
+        # Keep a separate evidence snapshot: --inspect and dry-run must
+        # never erase successful HEAD evidence from an earlier invocation.
+        save_manifest(manifest, root / "pilot-probe.json")
+    else:
+        manifest, head_source = _prior_head_evidence(manifest, root)
     manifest_path = save_manifest(manifest, root / "pilot-manifest.json")
     selected = {p["relative_path"] for p in manifest["products"]}
     statuses = dict(Counter(p["evidence"] for p in manifest["products"]))
@@ -102,6 +185,8 @@ def run_science_pilot(
         "selected_products": sorted(selected),
         "manifest": str(manifest_path.resolve()),
         "http_evidence": statuses,
+        "http_evidence_source": head_source,
+        "head_checked_at_utc": manifest["pilot"].get("last_probed_at_utc"),
         "state": ("URLS_PROBED_NOT_DOWNLOADED"
                   if check_urls and not download else "PLANNED_NOT_DOWNLOADED"),
         "data_root": str((root / "data").resolve()),
@@ -112,6 +197,12 @@ def run_science_pilot(
             "No sky subtraction, mosaic, photometric acceptance or LSB detection",
         ],
     }
+    # A prior download receipt records the transfer, not an authoritative
+    # archive checksum. Linking it does not upgrade scientific quality.
+    receipt_path = _prior_download_receipt(root, field, selected)
+    if receipt_path is not None:
+        report["prior_download_receipt"] = str(receipt_path.resolve())
+        report["prior_download_receipt_source"] = "LOCAL_PREVIOUS_RUN"
     if download:
         if statuses.get("HTTP_MISSING", 0):
             report["state"] = "URL_MISSING_DOWNLOAD_ABORTED"
