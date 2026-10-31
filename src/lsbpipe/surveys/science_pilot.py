@@ -152,7 +152,8 @@ def run_science_pilot(
     field: SkyField, hits: list[BrickHit], *, release: str,
     region: str, brick: str, band: str, directory: Path,
     check_urls: bool = False, download: bool = False,
-    inspect: bool = False, target_radius_arcsec: float = 35.,
+    inspect: bool = False, inspect_square: bool = False,
+    target_radius_arcsec: float = 35.,
     sky_inner_arcsec: float = 65., sky_outer_arcsec: float = 110.,
 ) -> dict:
     """Run one explicit pilot with bounded files and preserved provenance.
@@ -248,6 +249,26 @@ def run_science_pilot(
             raise
         report["coverage"] = str(coverage_path.resolve())
         report["state"] = "FITS_QA_DIAGNOSTIC_NOT_ADOPTED"
+    if inspect_square:
+        from .square_coverage import inspect_local_square, save_square_coverage
+        try:
+            square = inspect_local_square(
+                root / "data", release=release, region=region, brick=brick,
+                band=band, field=field)
+            square_path = save_square_coverage(
+                square, root / "pilot-square-coverage.json")
+        except Exception as exc:
+            report["state"] = "SQUARE_FITS_QA_FAILED"
+            report["square_inspection_error"] = (
+                f"{type(exc).__name__}: {exc}")
+            (root / "pilot-report.json").write_text(
+                json.dumps(report, indent=2, ensure_ascii=False),
+                encoding="utf-8")
+            raise
+        report["square_coverage"] = str(square_path.resolve())
+        report["state"] = (
+            "SQUARE_AND_CIRCLE_FITS_QA_DIAGNOSTIC_NOT_ADOPTED"
+            if inspect else "SQUARE_FITS_QA_DIAGNOSTIC_NOT_ADOPTED")
     report_path = root / "pilot-report.json"
     report_path.write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
