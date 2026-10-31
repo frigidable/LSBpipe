@@ -560,19 +560,26 @@ class FITSExplorer(QWidget):
             lo, hi, mode = info
             unit = ("nanomaggy" if kind == "image" else
                     "1/nanomaggy²" if kind == "invvar" else "exposures")
-            additional = (" · nonpositive IMAGE hidden by log display"
-                          if kind == "image" and mode == "log" else "")
-            self.range_info.setText(
-                f"{kind.upper()} · {mode} · {lo:.6g} … {hi:.6g} "
-                f"{unit}{additional} · display only")
-            # Display-only 256-sample color bar computed from identical
-            # native-unit bounds; cheap enough to render on the Qt thread.
-            samples = np.linspace(lo, hi, 256, dtype=np.float64)[None, :]
-            bar = rgb_for_layer(
-                samples, kind, dataset["band"], contrast=base_key[2],
-                scaling=mode, limits=(lo, hi))
-            self.scale_bar.setPixmap(self._pixmap(bar).scaled(
-                256, 12, Qt.IgnoreAspectRatio, Qt.FastTransformation))
+            if mode == "log" and not (np.isfinite(lo) and np.isfinite(hi)):
+                self.range_info.setText(
+                    f"{kind.upper()} · log unavailable: no positive finite "
+                    "samples; no display bounds inferred · original "
+                    "pixel readout unchanged")
+                self.scale_bar.clear()
+            else:
+                additional = (" · nonpositive IMAGE hidden by log display"
+                              if kind == "image" and mode == "log" else "")
+                self.range_info.setText(
+                    f"{kind.upper()} · {mode} · {lo:.6g} … {hi:.6g} "
+                    f"{unit}{additional} · display only")
+                # Same native-unit bounds and transfer as the raster.
+                samples = np.linspace(
+                    lo, hi, 256, dtype=np.float64)[None, :]
+                bar = rgb_for_layer(
+                    samples, kind, dataset["band"], contrast=base_key[2],
+                    scaling=mode, limits=(lo, hi))
+                self.scale_bar.setPixmap(self._pixmap(bar).scaled(
+                    256, 12, Qt.IgnoreAspectRatio, Qt.FastTransformation))
         self.render_status.setText(
             "Full-resolution original pixels · "
             f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} · "
