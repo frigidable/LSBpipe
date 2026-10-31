@@ -161,3 +161,22 @@ def test_mismatched_submitted_context_rejected_before_any_science_work(tmp_path)
             "masks", field=FIELD, hit=HIT, band="r",
             directory=data.parent, context=ctx(data, r=22.))
     assert not (data.parent/"qa-runs").exists()
+
+
+
+def test_fits_mutated_with_same_size_and_preserved_mtime_is_rejected(tmp_path):
+    """Size and mtime alone do not establish original FITS immutability."""
+    import os
+    data = inputs(tmp_path)
+    originals = original_quartet(data, HIT, "r")
+    target = originals["image"]
+    before = target.stat()
+    snap = snapshot_inputs({"source": originals})
+    with pytest.raises(RuntimeError, match="changed"):
+        with new_qa_run(
+                data_root=data, context=ctx(data), inputs=snap) as (stage, _):
+            (stage / "result.json").write_text("untrusted", encoding="utf-8")
+            payload = target.read_bytes()
+            target.write_bytes(b"X" * len(payload))
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert not list((data.parent / "qa-runs").iterdir())
