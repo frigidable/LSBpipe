@@ -338,3 +338,51 @@ def test_square_failure_produces_durable_failed_report(tmp_path, monkeypatch):
     assert recorded["state"] == "SQUARE_FITS_QA_FAILED"
     assert "WCS" in recorded["square_inspection_error"]
     assert not (tmp_path/"pilot-square-coverage.json").exists()
+
+
+
+def test_localize_masks_is_local_only_and_keeps_pilot_status_diagnostic(
+        tmp_path, monkeypatch):
+    from lsbpipe.surveys import mask_localization
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.probe_product",
+        lambda *a, **k: pytest.fail("No archive HEAD during mask localization"))
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.download_manifest",
+        lambda *a, **k: pytest.fail("No archive GET during mask localization"))
+    def locate(directory, *, field, release, region, brick, band,
+               target_radius_arcsec, sky_inner_arcsec, sky_outer_arcsec):
+        assert directory == tmp_path/"data"
+        assert field == FIELD
+        assert (release,region,brick,band) == (
+            "dr9","south","0401p012","r")
+        assert (target_radius_arcsec,sky_inner_arcsec,sky_outer_arcsec) == (
+            35,65,110)
+        return {"status":"DIAGNOSTIC_NOT_ADOPTED",
+                "bits":{"SATUR_R":{"connected_regions":1}}}
+    monkeypatch.setattr(
+        mask_localization, "inspect_mask_components", locate)
+    result = run_science_pilot(
+        FIELD, hits(), release="dr9", region="south",
+        brick="0401p012", band="r", directory=tmp_path,
+        localize_masks=True)
+    assert result["state"] == "MASK_LOCALIZATION_DIAGNOSTIC_NOT_ADOPTED"
+    assert result["http_evidence_source"] == "NOT_CHECKED"
+    assert (tmp_path/"pilot-mask-components.json").is_file()
+    assert json.loads((tmp_path/"pilot-mask-components.json").read_text(
+        "utf-8"))["bits"]["SATUR_R"]["connected_regions"] == 1
+
+
+def test_failed_mask_localization_reports_error(tmp_path, monkeypatch):
+    from lsbpipe.surveys import mask_localization
+    def fail(*args, **kwargs):
+        raise ValueError("Invalid original mask WCS")
+    monkeypatch.setattr(mask_localization,"inspect_mask_components",fail)
+    with pytest.raises(ValueError, match="mask WCS"):
+        run_science_pilot(
+            FIELD, hits(), release="dr9", region="south",
+            brick="0401p012", band="r", directory=tmp_path,
+            localize_masks=True)
+    report = json.loads((tmp_path/"pilot-report.json").read_text("utf-8"))
+    assert report["state"] == "MASK_LOCALIZATION_FAILED"
+    assert "WCS" in report["mask_localization_error"]
