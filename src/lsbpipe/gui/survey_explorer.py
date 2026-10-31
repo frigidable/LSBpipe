@@ -1313,6 +1313,7 @@ class SurveyExplorer(QMainWindow):
         self.inspector_tabs.setCurrentWidget(self.science_qa)
         self.science_qa.clear_result()
         self.message.setText("Analyzing original local FITS · " + action + "…")
+        self.science_qa.mark_running(action)
         self.science_qa.result.setPlainText(
             "Computing " + action + " from original local FITS…")
         if action == "explore":
@@ -1395,6 +1396,8 @@ class SurveyExplorer(QMainWindow):
         # An interactive view is not a new saved science report; do not
         # leave an old unrelated JSON report button looking current.
         self.science_qa.clear_result()
+        self.science_qa.steps.setItemText(
+            0, self.science_qa._step_names[0] + " · Viewer ready")
         self.science_qa.result.setPlainText(
             f"{dataset['source']} · original four-HDU FITS cutout\n"
             f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} pixels\n"
