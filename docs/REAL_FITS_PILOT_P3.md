@@ -189,3 +189,33 @@ $qa.regions | ForEach-Object {
 This plot is an exploratory QA figure. Neither logarithmic IVAR nor
 asinh image contrast is an estimate of limiting surface brightness,
 sky contamination, Sérsic parameters or measurement errors.
+
+## P3 exact five-arcminute square audit from original FITS
+
+The earlier 35 arcsec circle and 65–110 arcsec sky ring do not measure the
+whole 5′ by 5′ search footprint. The new --inspect-square option uses
+the exact tangent-plane sky polygon shared with the official Viewer overlay.
+It works from the existing original FITS with no further download:
+
+    python -m lsbpipe.surveys pilot @pilotArgs --inspect-square
+
+Or combine both existing circle/ring and new square diagnostics:
+
+    python -m lsbpipe.surveys pilot @pilotArgs --inspect --inspect-square --target-radius 35 --sky-inner 65 --sky-outer 110
+
+Read $pilotRoot\pilot-square-coverage.json on Windows:
+
+    $sq = Get-Content "$pilotRoot\pilot-square-coverage.json" -Raw | ConvertFrom-Json
+    $sq | Select-Object side_arcmin,polygon_within_single_brick,approximate_geometric_fraction,pixel_centers_sampled,estimated_square_pixel_centers,instrumentally_usable_fraction,mean_nexp_where_positive,warnings | Format-List
+    $sq.nexp_percentiles_positive | Format-List
+    $sq.maskbit_counts | Format-List
+
+The square test uses WCS for each pixel-center selection and separately
+projects boundary samples to determine whether one original brick
+encloses the entire square. The geometric fraction is only a local
+pixel-area approximation, NOT a rigorous mosaic completeness guarantee.
+Even 100% instrumental usability does not imply clean sky or sufficient
+surface-brightness depth. MEDIUM/Gaia and GALAXY/SGA are diagnostic flags,
+not automatic rejections of target flux. All original FITS stay unchanged.
+An incomplete single brick is explicitly reported rather than padded.
+The status remains DIAGNOSTIC_NOT_ADOPTED.
