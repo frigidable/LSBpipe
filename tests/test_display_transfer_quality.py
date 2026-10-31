@@ -113,20 +113,17 @@ def test_independent_bit_overlays_with_priority_and_no_fits_mutation():
     np.testing.assert_array_equal(bits, saved)
 
 
-def test_auto_log_with_no_positive_samples_never_constructs_zero_log_bounds():
-    # With all-zero IVAR (or wholly negative IMAGE), the display must not
-    # crash while preparing its native-unit logarithmic colorbar.
+def test_auto_log_with_no_positive_samples_reports_unavailable_native_bounds():
+    # All-zero IVAR and wholly negative IMAGE cannot define a log range.
+    # A 'reference' positive range would misleadingly imply real signal.
     for kind, layer in (
             ("invvar", np.zeros((5, 7), dtype="f4")),
             ("image", -np.ones((5, 7), dtype="f4"))):
         lo, hi, mode = display_range(layer, kind, scaling="log")
-        assert mode == "log" and 0 < lo < hi
-        assert transfer_settings(kind, scaling="log", limits=(lo, hi)) == (
-            "log", (lo, hi))
+        assert mode == "log" and np.isnan(lo) and np.isnan(hi)
+        with pytest.raises(ValueError, match="limits"):
+            transfer_settings(kind, scaling="log", limits=(lo, hi))
         assert np.all(display_gray(layer, kind, scaling="log") == 0)
-        assert np.all(display_gray(
-            np.linspace(lo, hi, 256)[None, :], kind,
-            scaling="log", limits=(lo, hi)) >= 0)
 
 
 def test_auto_percentiles_do_not_alias_periodic_fits_pixel_patterns():
