@@ -219,3 +219,41 @@ surface-brightness depth. MEDIUM/Gaia and GALAXY/SGA are diagnostic flags,
 not automatic rejections of target flux. All original FITS stay unchanged.
 An incomplete single brick is explicitly reported rather than padded.
 The status remains DIAGNOSTIC_NOT_ADOPTED.
+
+## Localize saturated / Gaia / SGA mask footprints in sky coordinates
+
+The four-panel QA figure is a human-readable diagnostic, not an
+unambiguous attribution of masked pixels to physical sources.
+Use the following read-only, offline command on already downloaded FITS:
+
+    python -m lsbpipe.surveys pilot @pilotArgs --localize-masks
+
+The output $pilotRoot\pilot-mask-components.json gives for each of
+SATUR_R, MEDIUM, GALAXY, BRIGHT and ALLMASK_R:
+
+- total tagged pixel count inside the square (WCS TAN membership);
+- number of 8-neighbor connected regions (not source detections);
+- the 20 largest regions with pixel count, centroid (ICRS RA/Dec),
+  angular distance to target, cutout-pixel bounding box, and counts
+  intersecting the 35 arcsec target circle and the 65–110 arcsec ring;
+- warning if the region touches the selected field boundary.
+
+The circular intersection uses exact spherical separations, rather
+than the original linearized Jacobian circle and ring selection, so
+a few pixel centers exactly on a radius may differ between reports.
+Connected regions may be truncated by the selected square edge; a
+single Gaia MEDIUM connected region need not correspond to a single
+real star if masks overlap. The source catalog association must be
+validated separately; a GALAXY footprint may mark the target.
+
+Read the largest components in PowerShell:
+
+    $loc = Get-Content "$pilotRoot\pilot-mask-components.json" -Raw | ConvertFrom-Json
+    foreach ($key in 'SATUR_R','MEDIUM','GALAXY') {
+      Write-Host "MASK $key"
+      $loc.bits.$key | Select-Object total_pixels_inside_square,connected_regions,total_target_circle_pixels,total_sky_annulus_pixels | Format-List
+      $loc.bits.$key.regions | Select-Object -First 5 pixels,centroid_ra_deg,centroid_dec_deg,angular_separation_arcsec,sky_annulus_pixels,touches_square_boundary | Format-Table
+    }
+
+No FITS modification, masking decision, sky fitting or automatic
+photometric acceptance is made by this operation.
