@@ -73,6 +73,8 @@ def rgb_for_layer(data: np.ndarray, kind: str, band: str,
 def overlay_rgba(maskbits: np.ndarray, band: str, *,
                  show_satur: bool, show_medium: bool,
                  show_galaxy: bool, show_invalid: bool = False,
+                 show_allmask: bool | None = None,
+                 show_bright: bool = False,
                  image: np.ndarray | None = None,
                  invvar: np.ndarray | None = None,
                  nexp: np.ndarray | None = None) -> np.ndarray:
@@ -82,6 +84,7 @@ def overlay_rgba(maskbits: np.ndarray, band: str, *,
     settings = (
         (show_galaxy, "GALAXY", OVERLAY_RGB["GALAXY"]),
         (show_medium, "MEDIUM", OVERLAY_RGB["MEDIUM"]),
+        (show_bright, "BRIGHT", OVERLAY_RGB["BRIGHT"]),
     )
     for show, name, color in settings:
         if not show:
@@ -105,13 +108,17 @@ def overlay_rgba(maskbits: np.ndarray, band: str, *,
         yy, xx = np.nonzero(invalid)
         overlay[yy, xx, 3] = np.where(
             (xx + yy) % 4 < 2, 170, 75).astype(np.uint8)
-    if show_satur:
-        selected = np.uint32(
-            (1 << LEGACY_BITS["SATUR_" + band.upper()]) |
-            (1 << LEGACY_BITS["ALLMASK_" + band.upper()]))
-        flagged = (bits & selected) != 0
-        overlay[flagged, :3] = OVERLAY_RGB["SATUR"]
-        overlay[flagged, 3] = 175
+    # Backward compatibility for previous combined SATUR/ALLMASK toggle.
+    if show_allmask is None:
+        show_allmask = show_satur
+    for enabled, prefix, color in (
+            (show_allmask, "ALLMASK", OVERLAY_RGB["ALLMASK"]),
+            (show_satur, "SATUR", OVERLAY_RGB["SATUR"])):
+        if enabled:
+            flagged = (bits & np.uint32(
+                1 << LEGACY_BITS[prefix + "_" + band.upper()])) != 0
+            overlay[flagged, :3] = color
+            overlay[flagged, 3] = 175
     return overlay
 
 
