@@ -57,6 +57,8 @@ def main(argv=None):
                        help="inspect local science quartet after download or from data/")
     pilot.add_argument("--inspect-square", action="store_true",
                        help="measure actual full search square on local FITS (no re-download)")
+    pilot.add_argument("--localize-masks", action="store_true",
+                       help="find connected SGA/Gaia/saturation mask regions in the search square")
     pilot.add_argument("--target-radius", type=float, default=35.)
     pilot.add_argument("--sky-inner", type=float, default=65.)
     pilot.add_argument("--sky-outer", type=float, default=110.)
@@ -95,6 +97,7 @@ def main(argv=None):
             brick=args.brick, band=args.band, directory=args.directory,
             check_urls=args.check_urls, download=args.download,
             inspect=args.inspect, inspect_square=args.inspect_square,
+            localize_masks=args.localize_masks,
             target_radius_arcsec=args.target_radius,
             sky_inner_arcsec=args.sky_inner, sky_outer_arcsec=args.sky_outer)
         print(f"Pilot: {report['state']}")
