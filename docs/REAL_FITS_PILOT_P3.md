@@ -130,3 +130,62 @@ HEAD-only evidence snapshot did not yet exist and was overwritten.
 After pulling the updated branch, run `--check-urls` once more,
 then `--inspect`. No new science FITS download is required.
 Please inspect the numerical `pilot-coverage.json` separately.
+
+## Visual evidence from the original four FITS (next QA checkpoint)
+
+The independent image/mask inspector was added after the successful real
+Windows coverage test. It uses the already-downloaded originals and does
+NOT fetch any data or modify the compressed FITS. Install the optional
+matplotlib dependency if necessary:
+
+```powershell
+python -m pip install -e ".[demo]"
+```
+
+In the existing PowerShell session where `$pilotRoot` is defined:
+
+```powershell
+python -m lsbpipe.surveys.qa_plots `
+  --directory "$pilotRoot\data" `
+  --release dr9 --region south --brick 0401p012 --band r `
+  --ra 40.096208 --dec 1.229250 --width-arcmin 5 `
+  --target-radius 35 --sky-inner 65 --sky-outer 110 `
+  --output "$pilotRoot\qa-dr9-south-r.png"
+```
+
+The output is a four-panel WCS-registered diagnostic: original image
+flux (asinh display stretch), logarithmic positive inverse variance,
+contributing NEXP, and the optical MASKBITS categorical display.
+All panels show the sky-coordinate **5′ square**, and the independent
+**35″ target circle, 65–110″ annulus** in magenta.
+
+MASKBITS display classes are prioritized solely for readability:
+0 exact MASKBITS zero, 1 SGA GALAXY only, 2 other nonzero MASKBITS flags,
+3 SATUR_R or ALLMASK_R. Multiple overlapping bits are reduced to
+the highest display class; the FITS and numeric `pilot-coverage.json`
+remain the authoritative record of every bit. Class 1 **does not imply
+the science source must be masked**. Class 2 is a warning, not an
+automatically rejected pixel. Class 3 is the current conservative
+instrumental rejection class.
+
+The viewport is padded around the 5′ search square. This is still a
+**single-brick** view; an incomplete single-brick cutout fails explicitly
+instead of filling missing data with zeros and representing them as
+coverage. A 5′ square is *not* validated by the earlier circular-aperture
+QA alone; the complete footprint must be checked separately.
+
+After rendering, send the PNG together with the latest mask census:
+
+```powershell
+$qa = Get-Content "$pilotRoot\pilot-coverage.json" -Raw |
+  ConvertFrom-Json
+$qa.regions | ForEach-Object {
+  Write-Host "REGION: $($_.label)"
+  $_.maskbit_counts | Format-List
+  $_.maskbit_fractions | Format-List
+}
+```
+
+This plot is an exploratory QA figure. Neither logarithmic IVAR nor
+asinh image contrast is an estimate of limiting surface brightness,
+sky contamination, Sérsic parameters or measurement errors.
