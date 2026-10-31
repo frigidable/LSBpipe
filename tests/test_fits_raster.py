@@ -96,3 +96,40 @@ def test_invalid_layers_or_contrast_rejected():
         rgb_for_layer(np.zeros((3, 3)), "image", "r", contrast="incorrect")
     with pytest.raises(ValueError):
         rgb_for_layer(np.zeros((3, 3, 3)), "image", "r")
+
+
+
+def test_invalid_checkerboard_is_distinct_from_valid_zero_flux():
+    from lsbpipe.gui.fits_raster import invalid_pixel_rgba
+    image = np.array([[0., np.nan, 1.], [np.inf, -5., 0.]], dtype="f4")
+    original = image.copy()
+    mask = invalid_pixel_rgba(image, "image")
+    assert mask.shape == (2, 3, 4)
+    assert mask.dtype == np.uint8
+    assert mask[0, 0, 3] == 0  # Real zero IMAGE is valid.
+    assert mask[0, 2, 3] == 0
+    assert mask[1, 1, 3] == 0  # Negative flux is not invalid.
+    assert mask[0, 1, 3] > 0
+    assert mask[1, 0, 3] > 0
+    assert tuple(mask[0, 1, :3]) == (225, 55, 190)
+    np.testing.assert_array_equal(image, original)
+
+    invvar = np.array([[0., 2.], [-0.3, np.nan]], dtype="f4")
+    bad_weights = invalid_pixel_rgba(invvar, "invvar")
+    assert bad_weights[0, 0, 3] > 0
+    assert bad_weights[0, 1, 3] == 0
+    assert bad_weights[1, 0, 3] > 0
+    assert bad_weights[1, 1, 3] > 0
+
+    nexp = np.array([[0, 2], [3, 0]], dtype="i2")
+    bad_exp = invalid_pixel_rgba(nexp, "nexp")
+    assert bad_exp[0, 0, 3] > 0
+    assert bad_exp[1, 1, 3] > 0
+    assert bad_exp[0, 1, 3] == 0
+    # MASKBITS zero is a legitimate bitfield, not a no-data declaration.
+    assert not np.any(invalid_pixel_rgba(nexp, "maskbits"))
+
+    with pytest.raises(ValueError):
+        invalid_pixel_rgba(nexp, "not_a_layer")
+    with pytest.raises(ValueError):
+        invalid_pixel_rgba(nexp.ravel(), "nexp")
