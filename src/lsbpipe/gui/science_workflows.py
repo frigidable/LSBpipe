@@ -8,9 +8,11 @@ a second implementation in the GUI.
 from __future__ import annotations
 
 from pathlib import Path
-import re
+import json
 
 from lsbpipe.surveys.legacy import SkyField, BrickHit, product_for
+from .qa_records import (ScienceContext, original_quartet, snapshot_inputs,
+                         new_qa_run)
 
 
 ACTIONS = ("square", "masks", "figure", "compare")
@@ -57,17 +59,28 @@ def run_science_qa(
     target_radius_arcsec: float = 35.,
     sky_inner_arcsec: float = 65.,
     sky_outer_arcsec: float = 110.,
+    context: ScienceContext | None = None,
 ) -> dict:
-    """Execute one selected action, returning readable summary and local path.
+    """Run an existing diagnostic and commit a unique immutable QA record.
 
-    Returned objects are immutable strings/numbers safe for signal passing
-    back to the Qt main thread; all computations and file I/O occur in the
-    calling worker thread. Neither data discovery nor network access occurs.
+    Original FITS are never rewritten. The output directory is a sibling
+    of the data root; manifests include actual local SHA-256 fingerprints,
+    all parameter settings, report hashes and explicit diagnostic status.
     """
     if action not in ACTIONS:
         raise ValueError(f"Unsupported science-QA operation: {action}")
     if band not in hit.median_exposures:
         raise ValueError(f"{band} band not in the selected brick summary")
+    actual = ScienceContext.capture(
+        action=action, field=field, hit=hit, band=band, directory=directory,
+        north_directory=north_directory, south_directory=south_directory,
+        target_radius_arcsec=target_radius_arcsec,
+        sky_inner_arcsec=sky_inner_arcsec,
+        sky_outer_arcsec=sky_outer_arcsec)
+    if context is not None and context != actual:
+        raise ValueError("Submitted science context does not match the worker inputs")
+    context = actual
+
     if action == "compare":
         if hit.release != "dr9":
             raise ValueError("Paired North/South comparison currently supports DR9 only")
@@ -75,37 +88,44 @@ def run_science_qa(
         south = BrickHit("dr9", "south", hit.name, 0, 0, 0, 0, {band: 1})
         northern = science_data_root(north_directory, hit=north, band=band)
         southern = science_data_root(south_directory, hit=south, band=band)
-        from lsbpipe.surveys.compare_regions import compare_original_regions
-        from lsbpipe.surveys.legacy import SkyField
-        report = compare_original_regions(
-            northern, southern, field=field, brick=hit.name, band=band)
-        destination = southern / "qa-reports" / (
-            _file_stem(field, south, band) + "_north-south.json")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        import json
-        destination.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-        joint = report["paired_instrumental_validity"]
-        lines = [
-            "DR9 North / South · paired original pixels",
-            f"Same WCS grid: {report['native_wcs_alignment']}",
-            f"Common sky pixels: {report['pixels']:,}",
-            f"Valid in both: {joint['both']:,}",
-            f"South only: {joint['south_only']:,}  ·  North only: {joint['north_only']:,}",
-            f"Invalid in both: {joint['neither']:,}",
-            "No stacking, independent-noise claim or photometric adoption.",
-        ]
+        quartets = {
+            "north": original_quartet(northern, north, band),
+            "south": original_quartet(southern, south, band),
+        }
+        record_root = southern
     else:
         data_root = science_data_root(directory, hit=hit, band=band)
-        destination = data_root / "qa-reports" / _file_stem(field, hit, band)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if action == "square":
+        quartets = {"source": original_quartet(data_root, hit, band)}
+        record_root = data_root
+
+    inputs = snapshot_inputs(quartets)
+    with new_qa_run(data_root=record_root, context=context,
+                    inputs=inputs) as (staging, record):
+        if action == "compare":
+            from lsbpipe.surveys.compare_regions import compare_original_regions
+            report = compare_original_regions(
+                northern, southern, field=field, brick=hit.name, band=band)
+            destination = staging / "north-south.json"
+            destination.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False),
+                encoding="utf-8")
+            joint = report["paired_instrumental_validity"]
+            lines = [
+                "DR9 North / South · paired original pixels",
+                f"Same WCS grid: {report['native_wcs_alignment']}",
+                f"Common sky pixels: {report['pixels']:,}",
+                f"Valid in both: {joint['both']:,}",
+                f"South only: {joint['south_only']:,}  ·  North only: {joint['north_only']:,}",
+                f"Invalid in both: {joint['neither']:,}",
+                "No stacking, independent-noise claim or photometric adoption.",
+            ]
+        elif action == "square":
             from lsbpipe.surveys.square_coverage import (
                 inspect_local_square, save_square_coverage)
             result = inspect_local_square(
                 data_root, release=hit.release, region=hit.region,
                 brick=hit.name, band=band, field=field)
-            destination = destination.with_name(destination.name + "_square.json")
+            destination = staging / "square.json"
             save_square_coverage(result, destination)
             total = result.pixel_centers_sampled
             frac = result.instrumentally_usable_fraction
@@ -133,7 +153,7 @@ def run_science_qa(
                 target_radius_arcsec=target_radius_arcsec,
                 sky_inner_arcsec=sky_inner_arcsec,
                 sky_outer_arcsec=sky_outer_arcsec)
-            destination = destination.with_name(destination.name + "_masks.json")
+            destination = staging / "mask-components.json"
             save_mask_components(result, destination)
             lines = [f"{hit.release.upper()} {hit.region} {hit.name} · mask regions"]
             for key in ("SATUR_"+band.upper(), "MEDIUM", "GALAXY"):
@@ -149,7 +169,7 @@ def run_science_qa(
             lines.append("Mask footprints do not identify catalog sources.")
         else:
             from lsbpipe.surveys.qa_plots import render_qa_figure
-            destination = destination.with_name(destination.name + "_four-layers.png")
+            destination = staging / "four-layers.png"
             render_qa_figure(
                 directory=data_root, release=hit.release,
                 region=hit.region, brick=hit.name, band=band,
@@ -165,13 +185,22 @@ def run_science_qa(
                 "Diagnostic only; no photometric acceptance.",
             ]
 
+        if not destination.is_file():
+            raise RuntimeError("Science backend did not produce its QA artifact")
+        artifact_name = destination.name
+
+    published = (record_root.resolve().parent / "qa-runs" /
+                 record["run_id"])
     return {
         "action": action,
         "status": "DIAGNOSTIC_NOT_ADOPTED",
         "summary": "\n".join(lines),
-        "path": str(destination.resolve()),
+        "path": str((published / artifact_name).resolve()),
+        "manifest_path": str((published / "manifest.json").resolve()),
+        "run_id": record["run_id"],
         "is_figure": action == "figure",
         "field": {"ra_deg": field.ra_deg, "dec_deg": field.dec_deg,
                   "width_arcmin": field.width_arcmin},
         "provenance": (hit.release, hit.region, hit.name, band),
+        "context": context,
     }
