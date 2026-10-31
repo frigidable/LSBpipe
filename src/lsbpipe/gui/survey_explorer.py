@@ -30,6 +30,8 @@ from lsbpipe.surveys.brick_overlay import brick_shapes, installation_script, hig
 from lsbpipe.gui.target_input import (
     parse_ra_deg, parse_dec_deg, parse_width_arcmin, parse_coordinate_pair)
 from lsbpipe.gui.qa_workbench import ScienceQAControls
+from lsbpipe.gui.fits_explorer import FITSExplorer
+from lsbpipe.gui.fits_raster import prepare_fits_explorer
 from lsbpipe.gui.science_workflows import run_science_qa as run_science_qa_backend
 
 
@@ -485,7 +487,9 @@ class SurveyExplorer(QMainWindow):
         self.qa_image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.qa_image_scroll.setWidget(self.qa_image)
         self.qa_image_scroll.viewport().installEventFilter(self)
-        self.preview_tabs.addTab(self.qa_image_scroll, "Local FITS QA")
+        self.preview_tabs.addTab(self.qa_image_scroll, "Four-layer QA")
+        self.fits_explorer = FITSExplorer()
+        self.preview_tabs.addTab(self.fits_explorer, "FITS Explorer")
         self.preview_tabs.currentChanged.connect(self._preview_tab_changed)
         preview_layout.addWidget(self.preview_tabs, 1)
         self.workspace_split = split
@@ -558,9 +562,7 @@ class SurveyExplorer(QMainWindow):
     def _target_edited(self, *_):
         if hasattr(self, "science_qa"):
             self.science_qa.clear_result()
-            self._qa_pixmap = None
-            self.qa_image.clear()
-            self.qa_image.setText("Target changed: run a new archive search.")
+            self._invalidate_qa_figure()
         # The existing bricks, if any, describe the previous target field.
         self.target_hint.setText(
             "Target changed · run Find data again to refresh the bricks"
@@ -1214,6 +1216,8 @@ class SurveyExplorer(QMainWindow):
                 f"{failures} files failed. Inspect download-report.json.")
 
     def _invalidate_qa_figure(self, *_):
+        if hasattr(self, "fits_explorer"):
+            self.fits_explorer.clear_data()
         self._qa_pixmap = None
         if hasattr(self, "qa_image"):
             self.qa_image.clear()
@@ -1222,9 +1226,9 @@ class SurveyExplorer(QMainWindow):
                 "Rerun the local FITS QA map.")
 
     def _preview_tab_changed(self, tab):
-        if tab == 1:
+        if tab in (1, 2):
             self.preview_label.setText(
-                "LOCAL FITS QA · original archived data · diagnostic only")
+                "LOCAL ORIGINAL FITS · read-only · DIAGNOSTIC_NOT_ADOPTED")
         else:
             self.preview_label.setText(
                 "REMOTE PREVIEW · Legacy Survey Viewer · not calibrated FITS input")
@@ -1295,18 +1299,78 @@ class SurveyExplorer(QMainWindow):
         self.message.setText("Analyzing original local FITS · " + action + "…")
         self.science_qa.result.setPlainText(
             "Computing " + action + " from original local FITS…")
-        def job(progress):
-            return run_science_qa_backend(
-                action, field=field, hit=hit, band=band, directory=directory,
-                north_directory=north, south_directory=south,
-                target_radius_arcsec=target,
-                sky_inner_arcsec=inner, sky_outer_arcsec=outer)
-        # Connect the local result-error handler BEFORE the worker starts;
-        # fast missing-file failures must not leave the QA tab "Computing".
-        self._start(job, self._science_qa_ready,
-                    on_error=self.science_qa.show_error)
+        if action == "explore":
+            def job(progress):
+                return prepare_fits_explorer(
+                    directory=directory, field=field, hit=hit, band=band,
+                    target_radius_arcsec=target,
+                    sky_inner_arcsec=inner, sky_outer_arcsec=outer)
+            self._start(job, self._fits_explorer_ready,
+                        on_error=self.science_qa.show_error)
+        else:
+            def job(progress):
+                return run_science_qa_backend(
+                    action, field=field, hit=hit, band=band, directory=directory,
+                    north_directory=north, south_directory=south,
+                    target_radius_arcsec=target,
+                    sky_inner_arcsec=inner, sky_outer_arcsec=outer)
+            # Connect errors before the worker starts.
+            self._start(job, self._science_qa_ready,
+                        on_error=self.science_qa.show_error)
+
+    def _fits_explorer_ready(self, dataset):
+        if not self._qa_context_current(dataset):
+            self.message.setText(
+                "Discarded stale FITS view: selected field or brick changed.")
+            self.science_qa.clear_result()
+            return
+        self.fits_explorer.set_dataset(dataset)
+        self.preview_tabs.setCurrentWidget(self.fits_explorer)
+        self.science_qa.result.setPlainText(
+            f"{dataset['source']} · original four-HDU FITS cutout\n"
+            f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} pixels\n"
+            "Use the center viewer to inspect individual source pixels.\n"
+            "DISPLAY ONLY · DIAGNOSTIC_NOT_ADOPTED")
+        self.message.setText(
+            "Interactive original-FITS view loaded: " + dataset["source"])
+
+    def _qa_context_current(self, dataset):
+        try:
+            field = self._field()
+        except ValueError:
+            return False
+        saved_field = dataset["field"]
+        if any(abs(a-b) > 1e-9 for a,b in (
+                (field.ra_deg, saved_field.ra_deg),
+                (field.dec_deg, saved_field.dec_deg),
+                (field.width_arcmin, saved_field.width_arcmin))):
+            return False
+        row = self.bricks.currentRow()
+        if not (self.bricks.selectedItems() and
+                0 <= row < len(self.hits)):
+            return False
+        h = self.hits[row]
+        identity = (
+            f"{h.release.upper()} {h.region} · {h.name} · "
+            f"{self.science_qa.current_band()}")
+        return dataset["source"] == identity
 
     def _science_qa_ready(self, result):
+        if not self._brick_result_matches_target():
+            self.message.setText("Discarded stale QA result for edited field.")
+            self.science_qa.clear_result()
+            return
+        row = self.bricks.currentRow()
+        if (row < 0 or row >= len(self.hits) or
+                not self.bricks.selectedItems()):
+            self.science_qa.clear_result()
+            return
+        expected = (
+            self.hits[row].release, self.hits[row].region,
+            self.hits[row].name, self.science_qa.current_band())
+        if result.get("provenance") != expected:
+            self.science_qa.clear_result()
+            return
         self.science_qa.show_result(result)
         self.message.setText(
             "Local FITS QA saved (not adopted): " + result["path"])
