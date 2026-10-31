@@ -436,6 +436,8 @@ class SurveyExplorer(QMainWindow):
         self.inspector_tabs.addTab(drawer_body, "Archive files")
         self.science_qa = ScienceQAControls()
         self.science_qa.requested.connect(self.start_science_qa)
+        self.science_qa.band.currentTextChanged.connect(
+            self._invalidate_qa_figure)
         self.inspector_tabs.addTab(self.science_qa, "Science QA")
         self.data_drawer.setWidget(self.inspector_tabs)
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_drawer)
@@ -680,7 +682,10 @@ class SurveyExplorer(QMainWindow):
             chosen = (self.hits[row]
                       if self.bricks.selectedItems() and
                       0 <= row < len(self.hits) else None)
+            previous = self.science_qa._hit
             self.science_qa.set_selected_hit(chosen)
+            if previous != chosen:
+                self._invalidate_qa_figure()
         key = (self._brick_overlay_keys[row]
                if self.bricks.selectedItems() and
                   0 <= row < len(self._brick_overlay_keys) else None)
@@ -1190,7 +1195,13 @@ class SurveyExplorer(QMainWindow):
 
     def _receive_download(self, report):
         if self._last_download_root:
-            self.science_qa.set_data_root(self._last_download_root)
+            row = self.bricks.currentRow()
+            selected = (self.hits[row]
+                        if self.bricks.selectedItems() and
+                        0 <= row < len(self.hits) else None)
+            self.science_qa.set_data_root(
+                self._last_download_root,
+                region=selected.region if selected is not None else None)
         successes = sum(x["state"] != "ERROR" for x in report["results"])
         failures = len(report["results"]) - successes
         self.message.setText(
@@ -1199,6 +1210,14 @@ class SurveyExplorer(QMainWindow):
         if failures:
             QMessageBox.warning(self, "Incomplete download",
                 f"{failures} files failed. Inspect download-report.json.")
+
+    def _invalidate_qa_figure(self, *_):
+        self._qa_pixmap = None
+        if hasattr(self, "qa_image"):
+            self.qa_image.clear()
+            self.qa_image.setText(
+                "The selected target, brick or band changed. "
+                "Rerun the local FITS QA map.")
 
     def _preview_tab_changed(self, tab):
         if tab == 1:
