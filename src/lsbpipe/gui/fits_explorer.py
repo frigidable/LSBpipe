@@ -165,6 +165,13 @@ class FITSExplorer(QWidget):
         self.range_info.setObjectName("fits_display_range_info")
         self.range_info.setWordWrap(True)
         layout.addWidget(self.range_info)
+        self.scale_bar = QLabel()
+        self.scale_bar.setObjectName("fits_numeric_colorbar")
+        self.scale_bar.setFixedHeight(13)
+        self.scale_bar.setToolTip(
+            "Color maps to the displayed native-unit limits above. "
+            "This is not a calibrated photometric measurement.")
+        layout.addWidget(self.scale_bar)
 
         toggles = QHBoxLayout()
         self.flags = {}
@@ -238,7 +245,7 @@ class FITSExplorer(QWidget):
 
         self.layer.currentIndexChanged.connect(self._layer_changed)
         self.contrast.currentIndexChanged.connect(self._show_layer)
-        self.scaling.currentIndexChanged.connect(self._show_layer)
+        self.scaling.currentIndexChanged.connect(self._scaling_changed)
         for key in ("SATUR", "ALLMASK", "BRIGHT", "MEDIUM", "GALAXY", "INVALID"):
             self.flags[key].toggled.connect(self._show_overlay)
         self.smooth.toggled.connect(self._set_smooth_preview)
@@ -264,6 +271,7 @@ class FITSExplorer(QWidget):
         self.context.setText("No local science data loaded.")
         self.scene.setSceneRect(0, 0, 0, 0)
         self.render_status.setText("No original FITS render loaded.")
+        self.scale_bar.clear()
 
     def set_dataset(self, dataset: dict):
         if dataset["status"] != "DIAGNOSTIC_NOT_ADOPTED":
@@ -326,6 +334,28 @@ class FITSExplorer(QWidget):
         saved = self._manual_ranges.get(kind)
         self.vmin.setText(format(saved[0], ".8g") if saved else "")
         self.vmax.setText(format(saved[1], ".8g") if saved else "")
+        self._show_layer()
+
+    def _scaling_changed(self, *_):
+        kind = self.layer.currentData()
+        saved = self._manual_ranges.get(kind)
+        if kind in ("image", "invvar", "nexp"):
+            try:
+                transfer_settings(
+                    kind, scaling=self.scaling.currentData(), limits=saved)
+            except ValueError as exc:
+                # Switching a display transfer cannot turn an originally
+                # valid view into a stale/undefined logarithmic transfer.
+                self._manual_ranges.pop(kind, None)
+                self.vmin.clear()
+                self.vmax.clear()
+                try:
+                    transfer_settings(kind, scaling=self.scaling.currentData())
+                except ValueError:
+                    self.scaling.blockSignals(True)
+                    self.scaling.setCurrentIndex(0)
+                    self.scaling.blockSignals(False)
+                self.range_info.setText(f"Scale adjusted: {exc}")
         self._show_layer()
 
     def _apply_display_range(self):
@@ -499,6 +529,7 @@ class FITSExplorer(QWidget):
             self._displayed_overlay_key = overlay_key
         kind = base_key[1]
         if info is None:
+            self.scale_bar.clear()
             if kind == "quality":
                 self.range_info.setText(
                     "QUALITY · categorical: valid / warning / SATUR / "
@@ -514,6 +545,14 @@ class FITSExplorer(QWidget):
             self.range_info.setText(
                 f"{kind.upper()} · {mode} · {lo:.6g} … {hi:.6g} "
                 f"{unit}{additional} · display only")
+            # Display-only 256-sample color bar computed from identical
+            # native-unit bounds; cheap enough to render on the Qt thread.
+            samples = np.linspace(lo, hi, 256, dtype=np.float64)[None, :]
+            bar = rgb_for_layer(
+                samples, kind, dataset["band"], contrast=base_key[2],
+                scaling=mode, limits=(lo, hi))
+            self.scale_bar.setPixmap(self._pixmap(bar).scaled(
+                256, 12, Qt.IgnoreAspectRatio, Qt.FastTransformation))
         self.render_status.setText(
             "Full-resolution original pixels · "
             f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} · "
