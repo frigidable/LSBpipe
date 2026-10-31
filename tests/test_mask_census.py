@@ -130,3 +130,17 @@ def test_refuse_wrong_grids_masks_and_radii():
             target_radius_arcsec=10., sky_inner_arcsec=5.)
     with pytest.raises(ValueError, match="MASKBITS"):
         _run({**data, "maskbits": data["maskbits"].astype("f4")}, wcs, field)
+
+
+def test_square_counts_match_independent_existing_square_coverage_module():
+    from lsbpipe.surveys.square_coverage import square_coverage_from_arrays
+    data, wcs, field = _fixture()
+    detailed = _run(data, wcs, field)["scope_counts"]["square"]
+    original = square_coverage_from_arrays(
+        data["image"], data["invvar"], data["nexp"], data["maskbits"],
+        wcs, field=field, band="r", chunk_rows=2)
+    assert original.pixel_centers_sampled == detailed["pixels"]
+    assert original.instrumentally_usable_pixels == detailed[
+        "instrumental"]["usable"]
+    for name in ("SATUR_R", "ALLMASK_R", "MEDIUM", "GALAXY"):
+        assert original.maskbit_counts[name] == detailed["maskbits"][name]
