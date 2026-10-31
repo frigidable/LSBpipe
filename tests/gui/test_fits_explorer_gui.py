@@ -190,7 +190,7 @@ def test_large_local_fits_renders_off_ui_thread_and_drops_stale_requests(
     qtbot.waitUntil(
         lambda: explorer._render_future is None and
                 explorer._render_requested is None and
-                explorer._displayed_base_key == ("base", "nexp", "standard"),
+                explorer._displayed_base_key == ("base", "nexp", "standard", "auto", None),
         timeout=20000)
     image = explorer.base_item.pixmap().toImage()
     expected = rgb_for_layer(dataset["data"]["nexp"], "nexp", "r")
@@ -234,3 +234,61 @@ def test_full_frame_viewer_refuses_unbounded_memory_without_silent_downsample(
     report["pixel_shape"] = (2500, 2500)
     with pytest.raises(ValueError, match="6 million-pixel"):
         explorer.set_dataset(report)
+
+
+
+def test_native_unit_ranges_and_scales_never_modify_original_pixels(explorer):
+    dataset = synthetic_dataset()
+    source = dataset["data"]["image"].copy()
+    explorer.set_dataset(dataset)
+    assert explorer.range_info.text().startswith("IMAGE")
+    explorer.vmin.setText("-2.5")
+    explorer.vmax.setText("12")
+    explorer.apply_limits.click()
+    assert explorer._manual_ranges["image"] == (-2.5, 12.)
+    assert "nanomaggy" in explorer.range_info.text()
+    assert "-2.5" in explorer.range_info.text()
+    assert "12" in explorer.range_info.text()
+    explorer.scaling.setCurrentIndex(explorer.scaling.findData("linear"))
+    assert explorer._displayed_base_key[3] == "linear"
+    explorer.vmin.setText("inf")
+    explorer.vmax.setText("4")
+    explorer.apply_limits.click()
+    assert "rejected" in explorer.range_info.text()
+    assert explorer._manual_ranges["image"] == (-2.5, 12.)
+    explorer.auto_limits.click()
+    assert "image" not in explorer._manual_ranges
+    assert explorer.vmin.text() == ""
+    assert explorer.vmax.text() == ""
+    np.testing.assert_array_equal(dataset["data"]["image"], source)
+
+
+def test_split_satur_allmask_bright_and_quality_map(explorer):
+    dataset = synthetic_dataset()
+    bits = dataset["data"]["maskbits"]
+    bits[1, 2] = 1 << 6
+    bits[2, 2] = 1 << 1
+    bits[3, 2] = 1 << 12
+    explorer.set_dataset(dataset)
+    explorer.flags["BRIGHT"].setChecked(True)
+    explorer.flags["SATUR"].setChecked(False)
+    alpha = explorer.overlay_item.pixmap().toImage()
+    # Qt screen Y is reversed relative to original FITS rows.
+    assert alpha.pixelColor(1,5).alpha() == 0  # SATUR_R alone
+    assert alpha.pixelColor(2,4).alpha() > 0   # ALLMASK_R
+    assert alpha.pixelColor(2,3).alpha() > 0   # BRIGHT
+    explorer.flags["ALLMASK"].setChecked(False)
+    alpha = explorer.overlay_item.pixmap().toImage()
+    assert alpha.pixelColor(2,4).alpha() == 0
+    explorer.layer.setCurrentIndex(explorer.layer.findData("quality"))
+    assert explorer.layer.currentData() == "quality"
+    assert explorer.range_info.text().startswith("QUALITY")
+    assert not explorer.vmin.isEnabled()
+    colored = explorer.base_item.pixmap().toImage()
+    # SGA target is an instrumentally valid warning (amber), not excluded.
+    assert colored.pixelColor(2,0).red() == 228
+    assert colored.pixelColor(2,0).green() == 179
+    assert colored.pixelColor(1,5).red() == 220   # SATUR_R class
+    assert colored.pixelColor(2,4).red() == 239   # ALLMASK_R class
+    assert colored.pixelColor(2,3).red() == 228   # BRIGHT warning
+    assert explorer.overlay_item.pixmap().toImage().pixelColor(2,3).alpha() == 0
