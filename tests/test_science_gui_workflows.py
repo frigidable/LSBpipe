@@ -150,3 +150,53 @@ def test_invalid_science_context_has_no_side_effects(tmp_path):
     with pytest.raises(ValueError, match="DR9 only"):
         run_science_qa(
             "compare", field=FIELD, hit=new_hit, band="r", directory="")
+
+
+def test_scoped_census_is_published_as_immutable_original_fits_qa(tmp_path, monkeypatch):
+    from lsbpipe.surveys import mask_census
+    create_quartet(tmp_path, SOUTH)
+    observed = []
+    payload = {
+        "status": "DIAGNOSTIC_NOT_ADOPTED",
+        "scope_counts": {
+            label: {
+                "pixels": pixels,
+                "instrumental": {"usable": usable},
+                "usable_fraction": usable / pixels if pixels else None,
+                "maskbits": {"SATUR_R": 2, "ALLMASK_R": 1,
+                             "MEDIUM": 3, "GALAXY": 4},
+            }
+            for label, pixels, usable in (
+                ("cutout", 100, 90), ("square", 80, 75),
+                ("target_in_square", 20, 15),
+                ("sky_annulus_in_square", 25, 22))
+        },
+    }
+    def fake_inspect(root, **kwargs):
+        observed.append((root, kwargs))
+        return payload
+    monkeypatch.setattr(mask_census, "inspect_local_mask_census", fake_inspect)
+    first = run_science_qa(
+        "census", field=FIELD, hit=SOUTH, band="r", directory=tmp_path,
+        target_radius_arcsec=35., sky_inner_arcsec=65.,
+        sky_outer_arcsec=110.)
+    second = run_science_qa(
+        "census", field=FIELD, hit=SOUTH, band="r", directory=tmp_path,
+        target_radius_arcsec=34., sky_inner_arcsec=65.,
+        sky_outer_arcsec=110.)
+    assert len(observed) == 2
+    assert observed[0][0] == tmp_path / "data"
+    assert observed[0][1]["sky_outer_arcsec"] == 110.
+    assert observed[1][1]["target_radius_arcsec"] == 34.
+    assert first["path"] != second["path"]
+    assert Path(first["path"]).name == "mask-census.json"
+    assert json.loads(Path(first["path"]).read_text("utf-8")) == payload
+    assert Path(first["manifest_path"]).is_file()
+    assert "Target ∩ square: 20 pixels" in first["summary"]
+    assert "Sky ring ∩ square: 25 pixels" in first["summary"]
+    assert "15 (75.00%)" in first["summary"]
+    assert first["status"] == "DIAGNOSTIC_NOT_ADOPTED"
+    assert first["is_figure"] is False
+    # Source files remain unchanged: they were never parsed/written by
+    # the mocked pure numerical step, and both receipts identify them.
+    assert first["provenance"] == ("dr9", "south", "0401p012", "r")
