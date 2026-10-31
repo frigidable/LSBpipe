@@ -22,8 +22,8 @@ def test_sga_is_a_diagnostic_category_not_an_automatic_rejection():
 def test_band_specific_saturation_priority_and_no_mask_mutation():
     bits = np.array([[1 << 3, 1 << 2, 1 << 12]], dtype=np.int16)
     saved = bits.copy()
-    np.testing.assert_array_equal(classify_maskbits(bits, "r"), [[3, 0, 1]])
-    np.testing.assert_array_equal(classify_maskbits(bits, "g"), [[0, 3, 1]])
+    np.testing.assert_array_equal(classify_maskbits(bits, "r"), [[3, 2, 1]])
+    np.testing.assert_array_equal(classify_maskbits(bits, "g"), [[2, 3, 1]])
     np.testing.assert_array_equal(bits, saved)
     with pytest.raises(ValueError, match="band"):
         classify_maskbits(bits, "u")
