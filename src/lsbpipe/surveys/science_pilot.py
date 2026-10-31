@@ -153,7 +153,7 @@ def run_science_pilot(
     region: str, brick: str, band: str, directory: Path,
     check_urls: bool = False, download: bool = False,
     inspect: bool = False, inspect_square: bool = False,
-    target_radius_arcsec: float = 35.,
+    localize_masks: bool = False, target_radius_arcsec: float = 35.,
     sky_inner_arcsec: float = 65., sky_outer_arcsec: float = 110.,
 ) -> dict:
     """Run one explicit pilot with bounded files and preserved provenance.
@@ -269,6 +269,26 @@ def run_science_pilot(
         report["state"] = (
             "SQUARE_AND_CIRCLE_FITS_QA_DIAGNOSTIC_NOT_ADOPTED"
             if inspect else "SQUARE_FITS_QA_DIAGNOSTIC_NOT_ADOPTED")
+    if localize_masks:
+        from .mask_localization import inspect_mask_components, save_mask_components
+        try:
+            regions = inspect_mask_components(
+                root / "data", field=field, release=release, region=region,
+                brick=brick, band=band,
+                target_radius_arcsec=target_radius_arcsec,
+                sky_inner_arcsec=sky_inner_arcsec,
+                sky_outer_arcsec=sky_outer_arcsec)
+            result_path = save_mask_components(
+                regions, root / "pilot-mask-components.json")
+        except Exception as exc:
+            report["state"] = "MASK_LOCALIZATION_FAILED"
+            report["mask_localization_error"] = f"{type(exc).__name__}: {exc}"
+            (root / "pilot-report.json").write_text(
+                json.dumps(report, indent=2, ensure_ascii=False),
+                encoding="utf-8")
+            raise
+        report["mask_components"] = str(result_path.resolve())
+        report["state"] = "MASK_LOCALIZATION_DIAGNOSTIC_NOT_ADOPTED"
     report_path = root / "pilot-report.json"
     report_path.write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
