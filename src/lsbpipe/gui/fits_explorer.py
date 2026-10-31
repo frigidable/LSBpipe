@@ -112,20 +112,22 @@ class FITSExplorer(QWidget):
         ):
             self.layer.addItem(name, kind)
         bar.addWidget(self.layer, 2)
-        bar.addWidget(QLabel("Stretch"))
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
+        controls.addWidget(QLabel("Stretch"))
         self.contrast = QComboBox()
         self.contrast.setObjectName("fits_contrast_selector")
         self.contrast.addItem("Standard", "standard")
         self.contrast.addItem("Faint features", "faint")
-        bar.addWidget(self.contrast, 1)
-        bar.addWidget(QLabel("Scale"))
+        controls.addWidget(self.contrast, 1)
+        controls.addWidget(QLabel("Scale"))
         self.scaling = QComboBox()
         self.scaling.setObjectName("fits_scaling_selector")
         for name, key in (
                 ("Auto", "auto"), ("Linear", "linear"),
                 ("Asinh", "asinh"), ("Log10", "log")):
             self.scaling.addItem(name, key)
-        bar.addWidget(self.scaling, 1)
+        controls.addWidget(self.scaling, 1)
 
         self.fit_button = QPushButton("Fit")
         self.fit_button.setToolTip("Fit the entire local FITS cutout into view")
@@ -135,7 +137,10 @@ class FITSExplorer(QWidget):
         self.smooth.setToolTip(
             "Off: exact nearest-neighbor pixels; on: interpolated display "
             "only, not suitable for checking isolated mask pixels")
+        controls.addWidget(self.fit_button)
+        controls.addWidget(self.smooth)
         layout.addLayout(bar)
+        layout.addLayout(controls)
 
         scale_row = QHBoxLayout()
         scale_row.addWidget(QLabel("vmin"))
@@ -158,8 +163,6 @@ class FITSExplorer(QWidget):
         self.auto_limits.setObjectName("fits_reset_display_range")
         self.auto_limits.clicked.connect(self._auto_display_range)
         scale_row.addWidget(self.auto_limits)
-        scale_row.addWidget(self.fit_button)
-        scale_row.addWidget(self.smooth)
         layout.addLayout(scale_row)
         self.range_info = QLabel("Display limits: automatic · native units")
         self.range_info.setObjectName("fits_display_range_info")
