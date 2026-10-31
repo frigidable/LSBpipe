@@ -111,8 +111,10 @@ def assert_inputs_unchanged(snapshot: dict):
     for quartet in snapshot.values():
         for info in quartet.values():
             current = Path(info["path"]).stat()
-            if (current.st_size, current.st_mtime_ns) != (
-                    info["bytes"], info["mtime_ns"]):
+            if ((current.st_size, current.st_mtime_ns) != (
+                    info["bytes"], info["mtime_ns"]) or
+                    _hash_file(Path(info["path"]))["sha256_local"]
+                    != info["sha256_local"]):
                 raise RuntimeError(
                     "An original FITS changed during science QA: "
                     + info["path"])
