@@ -38,6 +38,26 @@ def main(argv=None):
     check.add_argument("--sky-inner", type=float, required=True)
     check.add_argument("--sky-outer", type=float, required=True)
     check.add_argument("--output", type=Path, required=True)
+    pilot = sub.add_parser(
+        "pilot", help="plan four real Legacy FITS for one explicit region/brick")
+    pilot.add_argument("--ra", type=float, required=True)
+    pilot.add_argument("--dec", type=float, required=True)
+    pilot.add_argument("--width-arcmin", type=float, default=5.)
+    pilot.add_argument("--release", choices=("dr9", "dr10", "dr11"),
+                       default="dr9")
+    pilot.add_argument("--region", choices=("north", "south"), required=True)
+    pilot.add_argument("--brick", required=True)
+    pilot.add_argument("--band", choices=("g", "r", "i", "z"), default="r")
+    pilot.add_argument("--directory", type=Path, required=True)
+    pilot.add_argument("--check-urls", action="store_true",
+                       help="HEAD check each of the exactly four URLs")
+    pilot.add_argument("--download", action="store_true",
+                       help="explicitly download original four FITS to data/")
+    pilot.add_argument("--inspect", action="store_true",
+                       help="inspect local science quartet after download or from data/")
+    pilot.add_argument("--target-radius", type=float, default=35.)
+    pilot.add_argument("--sky-inner", type=float, default=65.)
+    pilot.add_argument("--sky-outer", type=float, default=110.)
     args = parser.parse_args(argv)
 
     if args.action == "discover":
@@ -64,6 +84,20 @@ def main(argv=None):
         print(f"{successes}/{len(report['results'])} completed; report at {args.directory / 'download-report.json'}")
         if not report["complete"]:
             return 1
+    elif args.action == "pilot":
+        from .science_pilot import run_science_pilot
+        field = SkyField(args.ra, args.dec, args.width_arcmin)
+        hits = discover_bricks(field, (args.release,))
+        report = run_science_pilot(
+            field, hits, release=args.release, region=args.region,
+            brick=args.brick, band=args.band, directory=args.directory,
+            check_urls=args.check_urls, download=args.download,
+            inspect=args.inspect, target_radius_arcsec=args.target_radius,
+            sky_inner_arcsec=args.sky_inner, sky_outer_arcsec=args.sky_outer)
+        print(f"Pilot: {report['state']}")
+        print(f"Products: {len(report['selected_products'])}")
+        print(f"HTTP evidence: {json.dumps(report['http_evidence'])}")
+        print(f"Report: {args.directory / 'pilot-report.json'}")
     elif args.action == "inspect-coverage":
         from .coverage import inspect_local_brick, save_coverage
         report = inspect_local_brick(
