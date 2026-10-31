@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .fits_raster import (
-    rgb_for_layer, overlay_rgba, fits_pixel_from_scene,
+    rgb_for_layer, overlay_rgba, invalid_pixel_rgba, fits_pixel_from_scene,
 )
 from lsbpipe.survey import LEGACY_BITS, maskbits_to_uint
 
@@ -108,6 +108,7 @@ class FITSExplorer(QWidget):
         toggles = QHBoxLayout()
         self.flags = {}
         for key, text, enabled in (
+            ("INVALID", "Invalid / no data", True),
             ("SATUR", "SATUR / ALLMASK", True),
             ("MEDIUM", "Gaia MEDIUM", True),
             ("GALAXY", "SGA GALAXY", False),
@@ -155,13 +156,17 @@ class FITSExplorer(QWidget):
         self.base_item.setZValue(0)
         self.overlay_item = QGraphicsPixmapItem()
         self.overlay_item.setZValue(1)
+        self.invalid_item = QGraphicsPixmapItem()
+        self.invalid_item.setZValue(2)
         self.scene.addItem(self.base_item)
         self.scene.addItem(self.overlay_item)
+        self.scene.addItem(self.invalid_item)
 
         self.layer.currentIndexChanged.connect(self._show_layer)
         self.contrast.currentIndexChanged.connect(self._show_layer)
         for key in ("SATUR", "MEDIUM", "GALAXY"):
             self.flags[key].toggled.connect(self._show_overlay)
+        self.flags["INVALID"].toggled.connect(self._show_invalid)
         self.flags["OUTLINES"].toggled.connect(self._toggle_outlines)
         self.view.pointHovered.connect(self.inspect_pixel)
 
@@ -169,6 +174,7 @@ class FITSExplorer(QWidget):
         self._dataset = None
         self.base_item.setPixmap(QPixmap())
         self.overlay_item.setPixmap(QPixmap())
+        self.invalid_item.setPixmap(QPixmap())
         for item in self._overlays:
             self.scene.removeItem(item)
         self._overlays.clear()
@@ -226,6 +232,7 @@ class FITSExplorer(QWidget):
                 self._dataset["band"], contrast=contrast)
         self.base_item.setPixmap(self._pixmap(rgb))
         self._show_overlay()
+        self._show_invalid()
 
     def _show_overlay(self, *_):
         if self._dataset is None:
@@ -236,6 +243,16 @@ class FITSExplorer(QWidget):
             show_medium=self.flags["MEDIUM"].isChecked(),
             show_galaxy=self.flags["GALAXY"].isChecked())
         self.overlay_item.setPixmap(self._pixmap(alpha, alpha=True))
+
+    def _show_invalid(self, *_):
+        if self._dataset is None:
+            return
+        kind = self.layer.currentData()
+        raw = self._dataset["data"][kind]
+        display = invalid_pixel_rgba(raw, kind)
+        if not self.flags["INVALID"].isChecked():
+            display[..., 3] = 0
+        self.invalid_item.setPixmap(self._pixmap(display, alpha=True))
 
     def _add_outlines(self):
         self._overlays.clear()
@@ -258,7 +275,7 @@ class FITSExplorer(QWidget):
             pen = QPen(color, width, line)
             pen.setCosmetic(True)
             item.setPen(pen)
-            item.setZValue(2)
+            item.setZValue(3)
             self.scene.addItem(item)
             self._overlays.append(item)
         self._toggle_outlines()
