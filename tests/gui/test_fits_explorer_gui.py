@@ -292,3 +292,21 @@ def test_split_satur_allmask_bright_and_quality_map(explorer):
     assert colored.pixelColor(2,4).red() == 239   # ALLMASK_R class
     assert colored.pixelColor(2,3).red() == 228   # BRIGHT warning
     assert explorer.overlay_item.pixmap().toImage().pixelColor(2,3).alpha() == 0
+
+
+def test_empty_positive_log_layer_still_renders_complete_gui_colorbar(explorer):
+    data = synthetic_dataset()
+    data["data"]["invvar"][:] = 0.
+    data["data"]["image"][:] = -10.
+    data["previews"] = {}  # Ensure actual renderer runs, not an old preview.
+    explorer.set_dataset(data)
+    explorer.layer.setCurrentIndex(explorer.layer.findData("invvar"))
+    assert "Display rendering failed" not in explorer.render_status.text()
+    assert explorer.scale_bar.pixmap() is not None
+    assert not explorer.scale_bar.pixmap().isNull()
+    assert "log" in explorer.range_info.text()
+    explorer.layer.setCurrentIndex(explorer.layer.findData("image"))
+    explorer.scaling.setCurrentIndex(explorer.scaling.findData("log"))
+    assert "Display rendering failed" not in explorer.render_status.text()
+    assert explorer.scale_bar.pixmap() is not None
+    assert not explorer.scale_bar.pixmap().isNull()
