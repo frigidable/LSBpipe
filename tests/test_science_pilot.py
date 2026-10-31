@@ -169,3 +169,123 @@ def test_head_only_probe_distinguished_from_actual_download(tmp_path, monkeypatc
     assert out["state"] == "URLS_PROBED_NOT_DOWNLOADED"
     assert out["http_evidence"] == {"HTTP_OK": 4}
     assert not (tmp_path/"data").exists()
+
+
+
+def _mock_successful_fits_inspection(monkeypatch):
+    from lsbpipe.surveys import coverage
+    monkeypatch.setattr(
+        coverage, "inspect_local_brick",
+        lambda *args, **kwargs: {"status": "DIAGNOSTIC_NOT_ADOPTED"})
+    def fake_save(result, path):
+        path.write_text(json.dumps(result), encoding="utf-8")
+        return path
+    monkeypatch.setattr(coverage, "save_coverage", fake_save)
+
+
+def test_inspect_only_preserves_previous_head_without_new_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.probe_product",
+        lambda entry: {"evidence": "HTTP_OK", "http_status": 200,
+                       "size_bytes": 12345})
+    result = run_science_pilot(
+        FIELD, hits(), release="dr9", region="south", brick="0401p012",
+        band="r", directory=tmp_path, check_urls=True)
+    assert result["http_evidence_source"] == "CURRENT_RUN"
+    snapshot = json.loads((tmp_path/"pilot-probe.json").read_text("utf-8"))
+    assert all(p["evidence"] == "HTTP_OK" for p in snapshot["products"])
+    assert result["head_checked_at_utc"]
+
+    def no_network(*args, **kwargs):
+        pytest.fail("A follow-up --inspect must not repeat HEAD or GET")
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.probe_product", no_network)
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.download_manifest", no_network)
+    _mock_successful_fits_inspection(monkeypatch)
+    qa = run_science_pilot(
+        FIELD, hits(), release="dr9", region="south", brick="0401p012",
+        band="r", directory=tmp_path, inspect=True)
+    assert qa["state"] == "FITS_QA_DIAGNOSTIC_NOT_ADOPTED"
+    assert qa["http_evidence"] == {"HTTP_OK": 4}
+    assert qa["http_evidence_source"] == "PREVIOUS_RUN_NOT_RECHECKED"
+    assert qa["head_checked_at_utc"] == result["head_checked_at_utc"]
+    assert (tmp_path/"pilot-coverage.json").is_file()
+    persistent = json.loads((tmp_path/"pilot-manifest.json").read_text("utf-8"))
+    assert all(e["evidence"] == "HTTP_OK" for e in persistent["products"])
+    # Dedicated audit snapshot survives both inspect and later dry-run.
+    run_science_pilot(FIELD, hits(), release="dr9", region="south",
+                      brick="0401p012", band="r", directory=tmp_path)
+    assert json.loads((tmp_path/"pilot-probe.json").read_text("utf-8")) == snapshot
+
+
+def test_previous_http_evidence_cannot_leak_into_different_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.probe_product",
+        lambda entry: {"evidence": "HTTP_OK", "size_bytes": 100})
+    run_science_pilot(FIELD, hits(), release="dr9", region="south",
+                      brick="0401p012", band="r", directory=tmp_path,
+                      check_urls=True)
+    changed = SkyField(FIELD.ra_deg + 0.01, FIELD.dec_deg, FIELD.width_arcmin)
+    result = run_science_pilot(
+        changed, hits(), release="dr9", region="south", brick="0401p012",
+        band="r", directory=tmp_path)
+    assert result["http_evidence_source"] == "NOT_CHECKED"
+    assert result["http_evidence"] == {"UNVERIFIED_URL": 4}
+    # Snapshot with original coordinate provenance must remain immutable.
+    assert json.loads((tmp_path/"pilot-probe.json").read_text("utf-8"))[
+        "field"]["ra_deg"] == FIELD.ra_deg
+
+
+def test_matching_local_download_receipt_linked_without_reclaiming_transfer(
+        tmp_path):
+    from dataclasses import asdict
+    data = tmp_path/"data"
+    data.mkdir()
+    entries = plan()["products"]
+    receipt = {
+        "schema": "lsbpipe.legacy-download-report/0.1",
+        "field": asdict(FIELD),
+        "complete": True,
+        "results": [
+            {"relative_path": e["relative_path"],
+             "state": "DOWNLOADED", "sha256": "abc"}
+            for e in entries],
+    }
+    (data/"download-report.json").write_text(
+        json.dumps(receipt), encoding="utf-8")
+    result = run_science_pilot(
+        FIELD, hits(), release="dr9", region="south", brick="0401p012",
+        band="r", directory=tmp_path)
+    assert result["prior_download_receipt"] == str(
+        (data/"download-report.json").resolve())
+    assert result["prior_download_receipt_source"] == "LOCAL_PREVIOUS_RUN"
+    changed = SkyField(FIELD.ra_deg+0.01, FIELD.dec_deg, FIELD.width_arcmin)
+    different = run_science_pilot(
+        changed, hits(), release="dr9", region="south", brick="0401p012",
+        band="r", directory=tmp_path)
+    assert "prior_download_receipt" not in different
+
+
+def test_failing_fits_qa_persists_failure_without_erasing_probe(
+        tmp_path, monkeypatch):
+    from lsbpipe.surveys import coverage
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.probe_product",
+        lambda entry: {"evidence": "HTTP_OK"})
+    run_science_pilot(
+        FIELD, hits(), release="dr9", region="south", brick="0401p012",
+        band="r", directory=tmp_path, check_urls=True)
+    def fail(*args, **kwargs):
+        raise ValueError("original FITS WCS mismatch")
+    monkeypatch.setattr(coverage, "inspect_local_brick", fail)
+    with pytest.raises(ValueError, match="WCS mismatch"):
+        run_science_pilot(
+            FIELD, hits(), release="dr9", region="south", brick="0401p012",
+            band="r", directory=tmp_path, inspect=True)
+    report = json.loads((tmp_path/"pilot-report.json").read_text("utf-8"))
+    assert report["state"] == "FITS_QA_FAILED"
+    assert "WCS mismatch" in report["inspection_error"]
+    assert report["http_evidence"] == {"HTTP_OK": 4}
+    assert report["http_evidence_source"] == "PREVIOUS_RUN_NOT_RECHECKED"
+    assert (tmp_path/"pilot-probe.json").exists()
