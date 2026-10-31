@@ -111,3 +111,53 @@ def test_independent_bit_overlays_with_priority_and_no_fits_mutation():
     assert bright[0,4,3] > 0
     assert bright[0,5,3] > 0  # GALAXY warning is retained
     np.testing.assert_array_equal(bits, saved)
+
+
+def test_auto_log_with_no_positive_samples_never_constructs_zero_log_bounds():
+    # With all-zero IVAR (or wholly negative IMAGE), the display must not
+    # crash while preparing its native-unit logarithmic colorbar.
+    for kind, layer in (
+            ("invvar", np.zeros((5, 7), dtype="f4")),
+            ("image", -np.ones((5, 7), dtype="f4"))):
+        lo, hi, mode = display_range(layer, kind, scaling="log")
+        assert mode == "log" and 0 < lo < hi
+        assert transfer_settings(kind, scaling="log", limits=(lo, hi)) == (
+            "log", (lo, hi))
+        assert np.all(display_gray(layer, kind, scaling="log") == 0)
+        assert np.all(display_gray(
+            np.linspace(lo, hi, 256)[None, :], kind,
+            scaling="log", limits=(lo, hi)) >= 0)
+
+
+def test_auto_percentiles_do_not_alias_periodic_fits_pixel_patterns():
+    # The old flat[::4] sampler sees only zeros and entirely misses
+    # the 25% population at 100 nanomaggies.
+    data = np.zeros((1000, 1000), dtype="f4")
+    data.flat[1::4] = 100.
+    lo, hi, mode = display_range(data, "image", scaling="linear")
+    assert mode == "linear"
+    assert lo == 0.
+    assert hi == 100.
+    # Fixed-seed sampling is reproducible across repeated render requests.
+    assert display_range(data, "image", scaling="linear") == (lo, hi, mode)
+
+
+def test_numeric_invalidity_and_allmask_overrule_saturation_overlays():
+    bits = np.array([[1 << 3, (1 << 3) | (1 << 6),
+                      (1 << 3) | (1 << 6)]], dtype="i4")
+    image = np.zeros((1, 3), dtype="f4")
+    invvar = np.ones((1, 3), dtype="f4")
+    invvar[0, 2] = 0.
+    layers = dict(image=image, invvar=invvar,
+                  nexp=np.ones((1, 3), dtype="i2"), maskbits=bits)
+    classes = quality_classes(layers, "r")
+    np.testing.assert_array_equal(classes[0], [2, 3, 4])
+    overlay = overlay_rgba(
+        bits, "r", show_satur=True, show_allmask=True,
+        show_medium=False, show_galaxy=False, show_invalid=True,
+        image=image, invvar=invvar, nexp=layers["nexp"])
+    assert tuple(overlay[0, 0, :3]) == (232, 71, 67)   # SATUR
+    assert tuple(overlay[0, 1, :3]) == (242, 119, 64)  # ALLMASK
+    assert tuple(overlay[0, 2, :3]) == (210, 57, 217) # invalid
+    np.testing.assert_array_equal(bits[0], [
+        1 << 3, (1 << 3) | (1 << 6), (1 << 3) | (1 << 6)])
