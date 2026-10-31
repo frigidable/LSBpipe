@@ -13,7 +13,7 @@ from PySide6.QtCore import QTimer
 
 from .raster_cache import BoundedRasterCache
 from .display_transfer import display_range, transfer_settings
-from .quality_map import quality_classes
+from .quality_map import quality_classes, quality_summary
 
 from PySide6.QtCore import Qt, Signal, QPointF
 from PySide6.QtGui import (
@@ -405,6 +405,8 @@ class FITSExplorer(QWidget):
                 dataset["data"][kind], kind, contrast=contrast,
                 scaling=scaling, limits=limits)
             info = (lo, hi, mode)
+        elif kind == "quality":
+            info = quality_summary(dataset["data"], dataset["band"])
         else:
             info = None
         if base is None:
@@ -528,12 +530,20 @@ class FITSExplorer(QWidget):
             self.overlay_item.setPixmap(self._pixmap(rgba, alpha=True))
             self._displayed_overlay_key = overlay_key
         kind = base_key[1]
-        if info is None:
+        if info is None or isinstance(info, dict):
             self.scale_bar.clear()
             if kind == "quality":
+                categories = info["categories"]
+                total = info["pixels"]
                 self.range_info.setText(
-                    "QUALITY · categorical: valid / warning / SATUR / "
-                    "ALLMASK / numeric invalid · no science adoption")
+                    "QUALITY · original cutout pixel centers "
+                    f"({total:,}): "
+                    f"valid clean {categories['clean']:,}; "
+                    f"catalog warning, still valid {categories['catalog_warning_not_excluded']:,}; "
+                    f"SATUR {categories['satur']:,}; "
+                    f"ALLMASK {categories['allmask']:,}; "
+                    f"numeric invalid {categories['bad_numeric']:,}. "
+                    "Diagnostic only, not an adopted mask.")
             else:
                 self.range_info.setText("MASKBITS · categorical bitmask display")
         else:
