@@ -66,11 +66,20 @@ def display_range(data: np.ndarray, kind: str, *,
     if kind == "nexp":
         finite &= sample >= 0
     if not np.any(finite):
-        # A logarithm requires positive samples: NaN bounds explicitly
-        # signal 'no log display available', rather than inventing a
-        # physical flux range. The raster renderer still returns black
-        # for the missing/nonpositive pixels without modifying the FITS.
-        return (float("nan"), float("nan"), mode) if mode == "log" else (0., 1., mode)
+        if mode == "log":
+            # A rare valid source pixel can be absent from a 250k sample.
+            # Verify the whole array before declaring log unavailable;
+            # this path is taken only when the sampled data contain none.
+            positive = np.asarray(
+                array[np.isfinite(array) & (array > 0)], dtype=np.float64)
+            if positive.size:
+                lo, hi = float(np.min(positive)), float(np.max(positive))
+                if hi <= lo:
+                    return max(lo / 10., 1e-300), max(lo, 1e-299), mode
+                return lo, hi, mode
+            # No physical log range exists. Never invent native-unit limits.
+            return float("nan"), float("nan"), mode
+        return 0., 1., mode
     sample = sample[finite]
     if kind == "nexp":
         return 0., max(float(np.max(sample)), 1.), mode
