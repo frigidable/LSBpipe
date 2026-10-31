@@ -66,9 +66,11 @@ def display_range(data: np.ndarray, kind: str, *,
     if kind == "nexp":
         finite &= sample >= 0
     if not np.any(finite):
-        # A positive placeholder is required for the display-only log
-        # colorbar. No source pixels are fabricated or made valid.
-        return (1e-3, 1., mode) if mode == "log" else (0., 1., mode)
+        # A logarithm requires positive samples: NaN bounds explicitly
+        # signal 'no log display available', rather than inventing a
+        # physical flux range. The raster renderer still returns black
+        # for the missing/nonpositive pixels without modifying the FITS.
+        return (float("nan"), float("nan"), mode) if mode == "log" else (0., 1., mode)
     sample = sample[finite]
     if kind == "nexp":
         return 0., max(float(np.max(sample)), 1.), mode
