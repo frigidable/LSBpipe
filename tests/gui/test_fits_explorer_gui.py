@@ -166,3 +166,71 @@ def test_no_data_visually_distinct_from_true_zero_and_toggleable(explorer):
     assert hidden.pixelColor(5, 1).alpha() == 0
     assert dataset["data"]["invvar"][3, 4] == 0.
     assert dataset["data"]["nexp"][4, 5] == 0
+
+
+
+def test_large_local_fits_renders_off_ui_thread_and_drops_stale_requests(
+        explorer, qtbot):
+    from lsbpipe.gui.fits_raster import rgb_for_layer
+    dataset = synthetic_dataset()
+    size = 560
+    dataset["data"] = {
+        kind: np.resize(values, (size, size)).copy()
+        for kind, values in dataset["data"].items()
+    }
+    dataset["previews"] = {}  # real originals now render on demand
+    dataset["pixel_shape"] = (size, size)
+    explorer.set_dataset(dataset)
+    assert explorer._render_future is not None
+    # Rapid edits may coalesce, but the *last* layer/contrast must win.
+    explorer.layer.setCurrentIndex(1)
+    explorer.contrast.setCurrentIndex(1)
+    explorer.layer.setCurrentIndex(2)
+    explorer.contrast.setCurrentIndex(0)
+    qtbot.waitUntil(
+        lambda: explorer._render_future is None and
+                explorer._render_requested is None and
+                explorer._displayed_base_key == ("base", "nexp", "standard"),
+        timeout=20000)
+    image = explorer.base_item.pixmap().toImage()
+    expected = rgb_for_layer(dataset["data"]["nexp"], "nexp", "r")
+    assert image.width() == size
+    assert image.height() == size
+    assert image.pixelColor(22, 1).blue() == int(expected[size-2, 22, 2])
+    assert explorer._raster_cache.bytes_used <= 48 * 1024 * 1024
+    assert explorer._raster_cache.count <= 4
+    assert "original pixels" in explorer.render_status.text().lower()
+
+
+def test_render_from_old_fits_never_reappears_after_clearing(
+        explorer, qtbot):
+    dataset = synthetic_dataset()
+    size = 550
+    dataset["data"] = {
+        kind: np.resize(values, (size, size)).copy()
+        for kind, values in dataset["data"].items()
+    }
+    dataset["previews"] = {}
+    dataset["pixel_shape"] = (size, size)
+    explorer.set_dataset(dataset)
+    assert explorer._render_future is not None
+    explorer.clear_data()
+    assert explorer.base_item.pixmap().isNull()
+    qtbot.waitUntil(
+        lambda: explorer._render_future is None, timeout=20000)
+    assert explorer._dataset is None
+    assert explorer.base_item.pixmap().isNull()
+    assert explorer._raster_cache.count == 0
+
+
+def test_full_frame_viewer_refuses_unbounded_memory_without_silent_downsample(
+        explorer):
+    report = synthetic_dataset()
+    huge = np.broadcast_to(
+        np.zeros((1, 1), dtype=np.float32), (2500, 2500))
+    report["data"] = {
+        "image": huge, "invvar": huge,
+        "nexp": huge, "maskbits": huge.astype(np.int32)}
+    report["pixel_shape"] = (2500, 2500)
+    with pytest.raises(ValueError, match="6 million-pixel"):
+        explorer.set_dataset(report)
