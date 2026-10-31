@@ -58,6 +58,7 @@ class ScienceQAControls(QWidget):
         self.band.setObjectName("science_qa_band")
         self.band.setAccessibleName("Band for local FITS diagnostics")
         layout.addWidget(self.band)
+        self.band.currentTextChanged.connect(self.clear_result)
 
         layout.addWidget(QLabel("Downloaded FITS folder"))
         self.directory, browse = self._directory_row(
@@ -141,7 +142,10 @@ class ScienceQAControls(QWidget):
             entry.setText(selected)
 
     def set_selected_hit(self, hit: BrickHit | None):
+        changed = hit != self._hit
         self._hit = hit
+        if changed:
+            self.clear_result()
         self.band.blockSignals(True)
         old_band = self.band.currentText()
         self.band.clear()
@@ -198,8 +202,8 @@ class ScienceQAControls(QWidget):
         self._last_path = None
         self.open_report.setEnabled(False)
         self.result.setPlainText(
-            "Selected sky target changed. Search again, select a brick, "
-            "then rerun local QA to avoid stale scientific results.")
+            "Target, brick or band selection changed. Verify original FITS "
+            "provenance and rerun this diagnostic to avoid stale results.")
 
     def _open_last(self):
         if self._last_path is not None:
