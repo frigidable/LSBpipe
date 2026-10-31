@@ -82,9 +82,10 @@ def test_quality_categories_match_current_conservative_instrumental_policy():
         "clean":1,"other_bit_not_excluded":3,
         "satur":1,"allmask":2,"bad_numeric":1}
     assert quality_rgb(data,"r").shape == (1,8,3)
-    # g-band saturation does NOT exclude r-band pixels.
-    assert quality_classes(data,"g")[0,4] == 0
-    assert quality_classes(data,"g")[0,5] == 0
+    # r-band saturation does NOT exclude g-band pixels, but a nonzero
+    # other-band bit is still a diagnostic warning, not falsely 'clean'.
+    assert quality_classes(data,"g")[0,4] == 1
+    assert quality_classes(data,"g")[0,5] == 1
 
 
 def test_independent_bit_overlays_with_priority_and_no_fits_mutation():
