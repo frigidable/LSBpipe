@@ -98,6 +98,7 @@ def run_science_qa(
     else:
         data_root = science_data_root(directory, hit=hit, band=band)
         destination = data_root / "qa-reports" / _file_stem(field, hit, band)
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if action == "square":
             from lsbpipe.surveys.square_coverage import (
                 inspect_local_square, save_square_coverage)
