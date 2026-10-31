@@ -96,3 +96,43 @@ def test_invalid_layers_or_contrast_rejected():
         rgb_for_layer(np.zeros((3, 3)), "image", "r", contrast="incorrect")
     with pytest.raises(ValueError):
         rgb_for_layer(np.zeros((3, 3, 3)), "image", "r")
+
+
+
+def test_original_fits_loader_does_not_preallocate_four_full_rgb_copies(
+        tmp_path, monkeypatch):
+    pytest.importorskip("astropy")
+    from astropy.wcs import WCS
+    from lsbpipe.gui import fits_raster
+    from lsbpipe.surveys.legacy import BrickHit, SkyField
+    field = SkyField(40.096208, 1.22925, 5.)
+    hit = BrickHit("dr9", "south", "0401p012",
+                   40., 40.2, 1.1, 1.4, {"r":9})
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = [50., 50.]
+    wcs.wcs.cdelt = [-0.262/3600., 0.262/3600.]
+    wcs.wcs.crval = [field.ra_deg,field.dec_deg]
+    wcs.wcs.ctype = ["RA---TAN","DEC--TAN"]
+    layers = {
+        "image":np.full((100,100), 1.5, dtype="f4"),
+        "invvar":np.full((100,100), 4., dtype="f4"),
+        "nexp":np.full((100,100), 7, dtype="i2"),
+        "maskbits":np.zeros((100,100), dtype="i4"),
+    }
+    monkeypatch.setattr(
+        fits_raster, "science_data_root",
+        lambda *a, **k: tmp_path)
+    monkeypatch.setattr(
+        fits_raster, "_load_four_cutouts",
+        lambda *a, **k: (layers,wcs,{k:1 for k in layers}))
+    monkeypatch.setattr(
+        fits_raster, "rgb_for_layer",
+        lambda *a, **k: pytest.fail("Eager RGB copies are forbidden"))
+    result = fits_raster.prepare_fits_explorer(
+        directory=tmp_path, field=field, hit=hit, band="r")
+    assert "previews" not in result
+    assert result["data"]["image"] is layers["image"]
+    assert all(not array.flags.writeable for array in layers.values())
+    assert result["hdu_indices"] == {k:1 for k in layers}
+    assert set(result["outlines"]) == {
+        "square","target","sky_inner","sky_outer"}
