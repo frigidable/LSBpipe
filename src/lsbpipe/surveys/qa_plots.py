@@ -20,7 +20,8 @@ from .viewer import field_polygon
 
 
 MASK_LABELS = (
-    "No listed flag", "SGA GALAXY", "Other warning", "SATUR/ALLMASK"
+    "MASKBITS = 0", "SGA GALAXY only",
+    "Other MASKBITS flags", "SATUR/ALLMASK (band)"
 )
 
 
@@ -39,13 +40,17 @@ def classify_maskbits(maskbits, band: str) -> np.ndarray:
     def has(name: str) -> np.ndarray:
         return (flags & np.uint32(1 << LEGACY_BITS[name])) != 0
 
+    galaxy_mask = np.uint32(1 << LEGACY_BITS["GALAXY"])
+    hard_mask = np.uint32(
+        (1 << LEGACY_BITS["SATUR_" + band.upper()]) |
+        (1 << LEGACY_BITS["ALLMASK_" + band.upper()]))
     classes[has("GALAXY")] = 1
-    warning = np.zeros(flags.shape, dtype=bool)
-    for name in ("BRIGHT", "MEDIUM", "NPRIMARY", "BAILOUT", "CLUSTER"):
-        warning |= has(name)
-    classes[warning] = 2
-    hard = has("SATUR_" + band.upper()) | has("ALLMASK_" + band.upper())
-    classes[hard] = 3
+    # Every OTHER nonzero bit is visible, even when not a chosen hard
+    # exclusion. Includes different-band instrument flags, because
+    # silently rendering those pixels as pristine would be misleading.
+    other_mask = np.uint32(0xFFFFFFFF ^ int(galaxy_mask | hard_mask))
+    classes[(flags & other_mask) != 0] = 2
+    classes[(flags & hard_mask) != 0] = 3
     return classes
 
 
