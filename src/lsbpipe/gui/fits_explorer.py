@@ -30,8 +30,8 @@ class FITSGraphicsView(QGraphicsView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setRenderHints(
-            QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        # Nearest-neighbor rendering is the safe default for mask/pixel QA.
+        self.setRenderHints(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
@@ -103,6 +103,12 @@ class FITSExplorer(QWidget):
         self.fit_button.setToolTip("Fit the entire local FITS cutout into view")
         self.fit_button.clicked.connect(self._fit)
         bar.addWidget(self.fit_button)
+        self.smooth = QCheckBox("Smooth preview")
+        self.smooth.setObjectName("fits_smooth_preview")
+        self.smooth.setToolTip(
+            "Off: exact nearest-neighbor pixels; on: interpolated display "
+            "only, not suitable for checking isolated mask pixels")
+        bar.addWidget(self.smooth)
         layout.addLayout(bar)
 
         toggles = QHBoxLayout()
@@ -112,6 +118,7 @@ class FITSExplorer(QWidget):
             ("SATUR", "SATUR / ALLMASK", True),
             ("MEDIUM", "Gaia MEDIUM", True),
             ("GALAXY", "SGA GALAXY", False),
+            ("INVALID", "No data / zero weight", True),
             ("OUTLINES", "Aperture outlines", True),
         ):
             check = QCheckBox(text)
@@ -124,6 +131,13 @@ class FITSExplorer(QWidget):
             self.flags[key] = check
         toggles.addStretch()
         layout.addLayout(toggles)
+        self.color_legend = QLabel(
+            "Red: SATUR/ALLMASK  ·  Amber: Gaia MEDIUM  ·  "
+            "Blue: SGA GALAXY  ·  Magenta hatch: invalid data. "
+            "Display overlays only.")
+        self.color_legend.setObjectName("fits_overlay_legend")
+        self.color_legend.setWordWrap(True)
+        layout.addWidget(self.color_legend)
 
         self.context = QLabel(
             "Open an original FITS quartet from the Science QA panel.")
@@ -156,6 +170,8 @@ class FITSExplorer(QWidget):
         self.base_item.setZValue(0)
         self.overlay_item = QGraphicsPixmapItem()
         self.overlay_item.setZValue(1)
+        self.base_item.setTransformationMode(Qt.FastTransformation)
+        self.overlay_item.setTransformationMode(Qt.FastTransformation)
         self.invalid_item = QGraphicsPixmapItem()
         self.invalid_item.setZValue(2)
         self.scene.addItem(self.base_item)
@@ -164,8 +180,9 @@ class FITSExplorer(QWidget):
 
         self.layer.currentIndexChanged.connect(self._show_layer)
         self.contrast.currentIndexChanged.connect(self._show_layer)
-        for key in ("SATUR", "MEDIUM", "GALAXY"):
+        for key in ("SATUR", "MEDIUM", "GALAXY", "INVALID"):
             self.flags[key].toggled.connect(self._show_overlay)
+        self.smooth.toggled.connect(self._set_smooth_preview)
         self.flags["INVALID"].toggled.connect(self._show_invalid)
         self.flags["OUTLINES"].toggled.connect(self._toggle_outlines)
         self.view.pointHovered.connect(self.inspect_pixel)
@@ -234,6 +251,11 @@ class FITSExplorer(QWidget):
         self._show_overlay()
         self._show_invalid()
 
+    def _set_smooth_preview(self, enabled: bool):
+        mode = Qt.SmoothTransformation if enabled else Qt.FastTransformation
+        self.base_item.setTransformationMode(mode)
+        self.overlay_item.setTransformationMode(mode)
+
     def _show_overlay(self, *_):
         if self._dataset is None:
             return
@@ -241,7 +263,11 @@ class FITSExplorer(QWidget):
             self._dataset["data"]["maskbits"], self._dataset["band"],
             show_satur=self.flags["SATUR"].isChecked(),
             show_medium=self.flags["MEDIUM"].isChecked(),
-            show_galaxy=self.flags["GALAXY"].isChecked())
+            show_galaxy=self.flags["GALAXY"].isChecked(),
+            show_invalid=self.flags["INVALID"].isChecked(),
+            image=self._dataset["data"]["image"],
+            invvar=self._dataset["data"]["invvar"],
+            nexp=self._dataset["data"]["nexp"])
         self.overlay_item.setPixmap(self._pixmap(alpha, alpha=True))
 
     def _show_invalid(self, *_):
