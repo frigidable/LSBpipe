@@ -177,6 +177,7 @@ class FITSExplorer(QWidget):
         layout.addWidget(self.scale_bar)
 
         toggles = QHBoxLayout()
+        other_toggles = QHBoxLayout()
         self.flags = {}
         for key, text, enabled in (
             ("SATUR", "SATUR", True),
@@ -193,10 +194,15 @@ class FITSExplorer(QWidget):
             check.setToolTip(
                 "Display-only colored overlay; does not change the FITS "
                 "pixels, mask policy or photometric acceptance")
-            toggles.addWidget(check)
+            if key in ("SATUR", "ALLMASK", "BRIGHT", "MEDIUM"):
+                toggles.addWidget(check)
+            else:
+                other_toggles.addWidget(check)
             self.flags[key] = check
         toggles.addStretch()
+        other_toggles.addStretch()
         layout.addLayout(toggles)
+        layout.addLayout(other_toggles)
         self.color_legend = QLabel(
             "Red: SATUR  ·  Orange: ALLMASK  ·  Purple: BRIGHT  ·  "
             "Amber: MEDIUM  ·  Blue: GALAXY  ·  Magenta: no data. "
