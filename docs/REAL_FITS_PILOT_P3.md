@@ -85,3 +85,48 @@ is required before multi-brick coverage P3 or photometric adoption.
 Direct NERSC FITS download was unavailable from the assistant execution
 environment while writing this plan. No HTTP or real-pixel numerical
 results are claimed here.
+
+## Windows field-run checkpoint — 2026-10-31
+
+Actual user-run evidence (not derived from a synthetic fixture):
+
+- `python -m pytest -q`: **221 passed in 19.34 seconds** on Windows.
+- `pilot` dry-run: **4 candidate files**, not yet verified.
+- `pilot --check-urls`: **HTTP_OK ×4**.
+- `pilot --download`: **FOUR_FILES_FETCHED_OR_REUSED_NEEDS_FITS_QA**.
+  Actual per-file states and SHA-256 are stored in
+  `data/download-report.json`, not printed in the short CLI output.
+- `pilot --inspect` with 35/65/110 arcsec diagnostic radii:
+  **FITS_QA_DIAGNOSTIC_NOT_ADOPTED**; the original four local FITS were
+  successfully read through the shape/WCS/pixel screening code.
+
+The *numerical contents* of `pilot-coverage.json` and the file receipt
+have **not yet been independently examined**, so no science completeness
+fraction, depth or successful photometry is claimed.
+
+### Follow-up: historical evidence preservation
+
+The first on-device `--inspect` command printed
+`{"UNVERIFIED_URL": 4}` even though the immediately preceding download
+had reported `HTTP_OK ×4`. Root cause: each invocation regenerated the
+manifest and overwrote the single most recent report. It did *not*
+invalidate the already downloaded FITS.
+
+New experimental fix:
+- HEAD results are additionally persisted in `pilot-probe.json` with a
+  UTC observation timestamp, and are reused only when the **complete
+  field, release, region, brick, band and all four URLs** match exactly.
+- `http_evidence_source` explicitly distinguishes
+  `CURRENT_RUN`, `PREVIOUS_RUN_NOT_RECHECKED`, and `NOT_CHECKED`.
+  A previously successful HEAD is never presented as a fresh check.
+- The original `data/download-report.json` is linked as an independent
+  previous-run receipt when its field and four selected product paths
+  match; this is *not* an authoritative remote-byte checksum.
+- FITS QA exceptions now record `FITS_QA_FAILED` and the error rather
+  than leaving an older successful report as the latest result.
+
+**Migration for the pilot that ran under the old code:** the earlier
+HEAD-only evidence snapshot did not yet exist and was overwritten.
+After pulling the updated branch, run `--check-urls` once more,
+then `--inspect`. No new science FITS download is required.
+Please inspect the numerical `pilot-coverage.json` separately.
