@@ -78,7 +78,7 @@ def _pairwise_square_arrays(north: dict, south: dict, wcs, *,
         side: {"satur_only": 0, "allmask_only": 0, "both": 0,
                "either": 0, "other_quality_only": 0,
                "invalid_total": 0, "valid_total": 0,
-               "median": {k: 0 for k in named}}
+               "named_mask_counts": {k: 0 for k in named}}
         for side in ("north", "south")
     }
     joint_valid = {
@@ -138,7 +138,7 @@ def _pairwise_square_arrays(north: dict, south: dict, wcs, *,
             ):
                 ctr[key] += int(np.count_nonzero(inside & cond))
             for name, bit in named.items():
-                ctr["median"][name] += int(
+                ctr["named_mask_counts"][name] += int(
                     np.count_nonzero(inside & ((bits & bit) != 0)))
             pos = inside & np.isfinite(nexp) & (nexp > 0)
             nexp_pairs[side + "_positive"] += int(np.count_nonzero(pos))
@@ -157,7 +157,8 @@ def _pairwise_square_arrays(north: dict, south: dict, wcs, *,
             ("SATUR_" + band.upper(), sat),
             ("ALLMASK_" + band.upper(), allmask),
         ):
-            bn, bs = (masks[side] & bit) != 0 for side in ("north", "south")
+            bn = (masks["north"] & bit) != 0
+            bs = (masks["south"] & bit) != 0
             for key, cond in (
                 ("both", bn & bs),
                 ("north_only", bn & ~bs),
@@ -218,9 +219,6 @@ def _pairwise_square_arrays(north: dict, south: dict, wcs, *,
         region = result["per_region"][side]
         region["instrumentally_usable_fraction"] = (
             region["valid_total"] / counted)
-        # Historical key retained only inside this new report, never
-        # replace an earlier pilot-square report.
-        region["named_mask_counts"] = region.pop("median")
     return result
 
 
