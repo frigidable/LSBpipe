@@ -179,3 +179,16 @@ def test_nonhard_and_future_maskbits_are_warnings_not_false_clean_pixels():
     # GALAXY (SGA) is a warning, not a blanket exclusion of the target.
     data["maskbits"][0, 0] = 1 << 12
     assert quality_classes(data, "r")[0, 0] == 1
+
+
+def test_sparse_positive_signal_is_not_lost_by_large_image_log_sampling():
+    # There is a single good pixel outside the deterministic sample;
+    # it still must be rendered rather than treated as an empty log layer.
+    image = np.full((1000, 1000), -4., dtype="f4")
+    image[0, 0] = 12.
+    lo, hi, mode = display_range(image, "image", scaling="log")
+    assert mode == "log" and np.isfinite(lo) and 0 < lo < hi
+    assert hi >= 12.
+    out = display_gray(image, "image", scaling="log")
+    assert out[0, 0] == 255
+    assert out[0, 1] == 0
