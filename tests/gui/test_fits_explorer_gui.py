@@ -133,5 +133,5 @@ def test_rejects_non_diagnostic_or_unregistered_science(explorer):
         explorer.set_dataset(report)
     report = synthetic_dataset()
     report["data"]["nexp"] = np.ones((2,2))
-    with pytest.raises(ValueError, match="same"):
+    with pytest.raises(ValueError, match="share a 2D pixel grid"):
         explorer.set_dataset(report)
