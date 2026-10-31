@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl, QTimer, QEvent
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QLineEdit,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QInputDialog,
     QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget, QHeaderView, QDockWidget, QScrollArea, QSizePolicy)
+    QVBoxLayout, QWidget, QHeaderView, QDockWidget, QScrollArea, QSizePolicy,
+    QTabWidget)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 
@@ -28,6 +29,8 @@ from lsbpipe.surveys.selection import matching_product, summarize_selection
 from lsbpipe.surveys.brick_overlay import brick_shapes, installation_script, highlight_script
 from lsbpipe.gui.target_input import (
     parse_ra_deg, parse_dec_deg, parse_width_arcmin, parse_coordinate_pair)
+from lsbpipe.gui.qa_workbench import ScienceQAControls
+from lsbpipe.gui.science_workflows import run_science_qa as run_science_qa_backend
 
 
 class _DiagnosticWebPage(QWebEnginePage):
@@ -127,6 +130,8 @@ class SurveyExplorer(QMainWindow):
         self.thread = None
         self._brick_overlay_features = []
         self._brick_overlay_keys = []
+        self._qa_pixmap = None
+        self._last_download_root = None
         self._build_ui()
 
     def _build_ui(self):
@@ -424,7 +429,15 @@ class SurveyExplorer(QMainWindow):
         drawer_layout.setSpacing(4)
         drawer_layout.addWidget(self.data_scroll, 1)
         drawer_layout.addLayout(bottom, 0)
-        self.data_drawer.setWidget(drawer_body)
+        # Scientific analysis occupies its own tab, preserving the archive
+        # file table and pinned Save/Download actions without squeezing them.
+        self.inspector_tabs = QTabWidget()
+        self.inspector_tabs.setObjectName("science_inspector_tabs")
+        self.inspector_tabs.addTab(drawer_body, "Archive files")
+        self.science_qa = ScienceQAControls()
+        self.science_qa.requested.connect(self.start_science_qa)
+        self.inspector_tabs.addTab(self.science_qa, "Science QA")
+        self.data_drawer.setWidget(self.inspector_tabs)
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_drawer)
         self.data_drawer.visibilityChanged.connect(self._drawer_visibility_changed)
         self.data_drawer.hide()
@@ -458,7 +471,21 @@ class SurveyExplorer(QMainWindow):
             "REMOTE PREVIEW · Legacy Survey Viewer · not calibrated FITS input")
         self.preview_label.setAccessibleName("Remote image provenance warning")
         preview_layout.addWidget(self.preview_label)
-        preview_layout.addWidget(self.sky, 1)
+        self.preview_tabs = QTabWidget()
+        self.preview_tabs.setObjectName("scientific_preview_tabs")
+        self.preview_tabs.addTab(self.sky, "Remote sky")
+        self.qa_image_scroll = QScrollArea()
+        self.qa_image_scroll.setObjectName("local_fits_preview")
+        self.qa_image_scroll.setWidgetResizable(True)
+        self.qa_image = QLabel("Run 'Open four-layer FITS map' in Science QA.")
+        self.qa_image.setAlignment(Qt.AlignCenter)
+        self.qa_image.setWordWrap(True)
+        self.qa_image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.qa_image_scroll.setWidget(self.qa_image)
+        self.qa_image_scroll.viewport().installEventFilter(self)
+        self.preview_tabs.addTab(self.qa_image_scroll, "Local FITS QA")
+        self.preview_tabs.currentChanged.connect(self._preview_tab_changed)
+        preview_layout.addWidget(self.preview_tabs, 1)
         self.workspace_split = split
         split.addWidget(self.navigation_scroll)
         split.addWidget(preview_container)
@@ -527,6 +554,11 @@ class SurveyExplorer(QMainWindow):
         return field
 
     def _target_edited(self, *_):
+        if hasattr(self, "science_qa"):
+            self.science_qa.clear_result()
+            self._qa_pixmap = None
+            self.qa_image.clear()
+            self.qa_image.setText("Target changed: run a new archive search.")
         # The existing bricks, if any, describe the previous target field.
         self.target_hint.setText(
             "Target changed · run Find data again to refresh the bricks"
@@ -644,6 +676,11 @@ class SurveyExplorer(QMainWindow):
     def _selected_brick_changed(self):
         """Highlight selected brick without reloading the hosted map."""
         row = self.bricks.currentRow()
+        if hasattr(self, "science_qa"):
+            chosen = (self.hits[row]
+                      if self.bricks.selectedItems() and
+                      0 <= row < len(self.hits) else None)
+            self.science_qa.set_selected_hit(chosen)
         key = (self._brick_overlay_keys[row]
                if self.bricks.selectedItems() and
                   0 <= row < len(self._brick_overlay_keys) else None)
@@ -655,6 +692,10 @@ class SurveyExplorer(QMainWindow):
         self._run_brick_js(highlight_script(key, hover=True))
 
     def eventFilter(self, watched, event):
+        if (hasattr(self, "qa_image_scroll") and
+                watched is self.qa_image_scroll.viewport() and
+                event.type() == QEvent.Resize):
+            QTimer.singleShot(0, self._resize_qa_pixmap)
         if (hasattr(self, "bricks") and
                 watched is self.bricks.viewport() and
                 event.type() == QEvent.Leave):
@@ -743,6 +784,7 @@ class SurveyExplorer(QMainWindow):
         self.download_btn.setEnabled(False)
         self.verify_btn.setEnabled(False)
         self.qa_btn.setEnabled(False)
+        self.science_qa.set_busy(True)
         thread = QThread(self)
         worker = TaskWorker(action)
         worker.moveToThread(thread)
@@ -767,6 +809,7 @@ class SurveyExplorer(QMainWindow):
         self.download_btn.setEnabled(True)
         self.verify_btn.setEnabled(True)
         self.qa_btn.setEnabled(True)
+        self.science_qa.set_busy(False)
 
     def _progress(self, item):
         if isinstance(item, tuple):
@@ -784,6 +827,7 @@ class SurveyExplorer(QMainWindow):
             QMessageBox.warning(self, "Select a release", "Choose at least one data release.")
             return
         self.manifest = None
+        self.science_qa.set_selected_hit(None)
         self.bricks.setRowCount(0)
         self.files.setRowCount(0)
         self.message.setText("Loading survey geometry and footprint catalogs…")
@@ -809,6 +853,7 @@ class SurveyExplorer(QMainWindow):
         # The table is the source for release and NEXP context.
         # The map shows unique sky-brick outlines; no duplicate prose needed.
         self.bricks.clearSelection()
+        self.science_qa.set_selected_hit(None)
         self.show_viewer()
         self._fill_brick_filters()
         self._fill_files()
@@ -1056,6 +1101,7 @@ class SurveyExplorer(QMainWindow):
         if not directory:
             return
         manifest = json.loads(json.dumps(self.manifest))
+        self._last_download_root = str(directory)
         self.bar.setValue(0)
         self.message.setText("Downloading original archive FITS files…")
 
@@ -1143,6 +1189,8 @@ class SurveyExplorer(QMainWindow):
             self, "Legacy FITS coverage — diagnostic", chr(10).join(lines))
 
     def _receive_download(self, report):
+        if self._last_download_root:
+            self.science_qa.set_data_root(self._last_download_root)
         successes = sum(x["state"] != "ERROR" for x in report["results"])
         failures = len(report["results"]) - successes
         self.message.setText(
@@ -1151,6 +1199,106 @@ class SurveyExplorer(QMainWindow):
         if failures:
             QMessageBox.warning(self, "Incomplete download",
                 f"{failures} files failed. Inspect download-report.json.")
+
+    def _preview_tab_changed(self, tab):
+        if tab == 1:
+            self.preview_label.setText(
+                "LOCAL FITS QA · original archived data · diagnostic only")
+        else:
+            self.preview_label.setText(
+                "REMOTE PREVIEW · Legacy Survey Viewer · not calibrated FITS input")
+
+    def _resize_qa_pixmap(self):
+        if self._qa_pixmap is None:
+            return
+        viewport = self.qa_image_scroll.viewport().size()
+        width, height = max(viewport.width() - 14, 1), max(viewport.height() - 14, 1)
+        if width < 10 or height < 10:
+            return
+        display = self._qa_pixmap.scaled(
+            width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.qa_image.setPixmap(display)
+
+    def start_science_qa(self, action: str):
+        """Run an existing original-FITS scientific validator in a worker.
+
+        No network calls; context is frozen before QThread starts. A stale
+        target/brick selection can never be silently analyzed as new data.
+        """
+        if self.thread is not None:
+            QMessageBox.information(
+                self, "Busy", "Another survey operation is running.")
+            return
+        if not self._brick_result_matches_target():
+            QMessageBox.warning(
+                self, "Search first",
+                "Search this ICRS target again before analyzing a selected "
+                "brick. The previous result may belong to another field.")
+            return
+        row = self.bricks.currentRow()
+        if (row < 0 or row >= len(self.hits) or
+                not self.bricks.selectedItems()):
+            QMessageBox.information(
+                self, "Select a brick",
+                "Select one release/region/brick row in the left table.")
+            return
+        field = self._validated_field()
+        if field is None:
+            return
+        hit = self.hits[row]
+        band = self.science_qa.current_band()
+        directory = self.science_qa.directory.text().strip()
+        north = self.science_qa.north_directory.text().strip()
+        south = self.science_qa.south_directory.text().strip()
+        if action == "compare":
+            if not north or not south:
+                QMessageBox.information(
+                    self, "Choose both data folders",
+                    "Select separate original DR9 North and South "
+                    "download folders before comparing native pixels.")
+                return
+        elif not directory:
+            QMessageBox.information(
+                self, "Choose local FITS",
+                "Select a downloaded FITS folder in the Science QA tab.")
+            return
+        target, inner, outer = (
+            self.target_radius.value(),
+            self.sky_inner.value(), self.sky_outer.value())
+        if not 0 < target <= inner < outer <= 1200:
+            QMessageBox.warning(
+                self, "Invalid QA radii",
+                "Require 0 < object radius <= sky inner < sky outer <= 1200 arcsec")
+            return
+        self.inspector_tabs.setCurrentWidget(self.science_qa)
+        self.message.setText("Analyzing original local FITS · " + action + "…")
+        self.science_qa.result.setPlainText(
+            "Computing " + action + " from original local FITS…")
+        def job(progress):
+            return run_science_qa_backend(
+                action, field=field, hit=hit, band=band, directory=directory,
+                north_directory=north, south_directory=south,
+                target_radius_arcsec=target,
+                sky_inner_arcsec=inner, sky_outer_arcsec=outer)
+        self._start(job, self._science_qa_ready)
+        if self.worker is not None:
+            self.worker.failed.connect(self.science_qa.show_error)
+
+    def _science_qa_ready(self, result):
+        self.science_qa.show_result(result)
+        self.message.setText(
+            "Local FITS QA saved (not adopted): " + result["path"])
+        if result["is_figure"]:
+            pixmap = QPixmap(result["path"])
+            if pixmap.isNull():
+                QMessageBox.warning(
+                    self, "FITS figure not readable",
+                    "The diagnostic figure was saved, but Qt could not open "
+                    "the preview. Open the PNG externally from Science QA.")
+                return
+            self._qa_pixmap = pixmap
+            self.preview_tabs.setCurrentWidget(self.qa_image_scroll)
+            self._resize_qa_pixmap()
 
     def closeEvent(self, event):
         if self.thread is not None:
