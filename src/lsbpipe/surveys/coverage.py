@@ -8,7 +8,7 @@ source isophotes or sky-fitting regions.
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import json
 import math
@@ -32,6 +32,8 @@ class RegionCoverage:
     mean_nexp_where_positive: float | None
     bright_warning_fraction: float | None
     galaxy_warning_fraction: float | None
+    maskbit_counts: dict[str, int] = field(default_factory=dict)
+    maskbit_fractions: dict[str, float | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,8 @@ class CoverageResult:
     regions: tuple[RegionCoverage, RegionCoverage]
     warnings: tuple[str, ...]
     files: dict[str, str]
+    hdu_indices: dict[str, int] = field(default_factory=dict)
+    header_units: dict[str, str | None] = field(default_factory=dict)
 
     def to_dict(self):
         return asdict(self)
@@ -58,6 +62,8 @@ def coverage_from_arrays(
     target_radius_arcsec: float, sky_inner_arcsec: float,
     sky_outer_arcsec: float, chunk_rows: int = 256,
     files: dict[str, str] | None = None,
+    hdu_indices: dict[str, int] | None = None,
+    header_units: dict[str, str | None] | None = None,
 ) -> CoverageResult:
     """Quantify pixel coverage, with strict mask and NEXP semantics.
 
@@ -109,15 +115,23 @@ def coverage_from_arrays(
         math.pi*target_radius_arcsec**2 / pix_area,
         math.pi*(sky_outer_arcsec**2 - sky_inner_arcsec**2) / pix_area,
     )
+    # Keep semantic MASKBITS provenance independent from the hard
+    # instrumental validity criterion: an SGA GALAXY flag can cover the
+    # science target itself and MUST NOT automatically remove its flux.
+    audit_names = (
+        "NPRIMARY", "BRIGHT", "MEDIUM", "GALAXY", "CLUSTER",
+        "BAILOUT", f"SATUR_{band.upper()}", f"ALLMASK_{band.upper()}",
+    )
+    audit_bits = {
+        name: np.int64(1 << LEGACY_BITS[name]) for name in audit_names
+    }
     stats = [
         {"sample":0,"image":0,"ivar":0,"nexp":0,"usable":0,
-         "nexp_sum":0.,"bright":0,"galaxy":0}
+         "nexp_sum":0.,"mask_counts":{name:0 for name in audit_names}}
         for _ in range(2)
     ]
-    bit_satur = np.int64(1 << LEGACY_BITS['SATUR_' + band.upper()])
-    bit_all = np.int64(1 << LEGACY_BITS['ALLMASK_' + band.upper()])
-    bit_bright = np.int64(1 << LEGACY_BITS['BRIGHT'])
-    bit_galaxy = np.int64(1 << LEGACY_BITS['GALAXY'])
+    bit_satur = audit_bits[f"SATUR_{band.upper()}"]
+    bit_all = audit_bits[f"ALLMASK_{band.upper()}"]
     xs = np.arange(nx, dtype=float)[None, :] - float(x0)
     for start in range(0, ny, chunk_rows):
         stop = min(start + chunk_rows, ny)
@@ -140,8 +154,6 @@ def coverage_from_arrays(
         flags = bits_part.astype(np.int64, copy=False)
         instrument_ok = (flags & (bit_satur | bit_all)) == 0
         usable = data_ok & weight_ok & exposure_ok & instrument_ok
-        bright = (flags & bit_bright) != 0
-        galaxy = (flags & bit_galaxy) != 0
         for mask, info in zip((target, sky), stats):
             n = int(np.count_nonzero(mask))
             if not n:
@@ -153,8 +165,10 @@ def coverage_from_arrays(
             info["nexp"] += int(np.count_nonzero(positive))
             info["nexp_sum"] += float(np.sum(nexp_part[positive], dtype=np.float64))
             info["usable"] += int(np.count_nonzero(usable & mask))
-            info["bright"] += int(np.count_nonzero(bright & mask))
-            info["galaxy"] += int(np.count_nonzero(galaxy & mask))
+            selected_bits = flags[mask]
+            for name, value in audit_bits.items():
+                info["mask_counts"][name] += int(
+                    np.count_nonzero((selected_bits & value) != 0))
 
     regions = []
     warnings = [
@@ -172,7 +186,11 @@ def coverage_from_arrays(
             fraction("image"), fraction("ivar"), fraction("nexp"),
             fraction("usable"), stat["usable"],
             stat["nexp_sum"] / stat["nexp"] if stat["nexp"] else None,
-            fraction("bright"), fraction("galaxy"))
+            (stat["mask_counts"]["BRIGHT"] / n) if n else None,
+            (stat["mask_counts"]["GALAXY"] / n) if n else None,
+            maskbit_counts=dict(stat["mask_counts"]),
+            maskbit_fractions={name: count / n if n else None
+                               for name, count in stat["mask_counts"].items()})
         regions.append(reg)
         if n == 0:
             warnings.append(f"{label.upper()}_NO_PIXEL_CENTERS")
@@ -180,6 +198,12 @@ def coverage_from_arrays(
             warnings.append(f"{label.upper()}_APPROX_FOOTPRINT_INCOMPLETE")
         if n and stat["usable"] < n:
             warnings.append(f"{label.upper()}_INVALID_OR_MASKED_PIXELS")
+        if n and stat["mask_counts"]["GALAXY"]:
+            warnings.append(
+                f"{label.upper()}_SGA_GALAXY_BIT_PRESENT_DO_NOT_AUTOMASK")
+        for name in ("NPRIMARY", "BRIGHT", "MEDIUM", "CLUSTER", "BAILOUT"):
+            if n and stat["mask_counts"][name]:
+                warnings.append(f"{label.upper()}_{name}_WARNING")
     return CoverageResult(
         status="DIAGNOSTIC_NOT_ADOPTED",
         band=band, shape=tuple(int(v) for v in shape),
@@ -190,7 +214,41 @@ def coverage_from_arrays(
         pixel_area_arcsec2=float(pix_area),
         regions=tuple(regions), warnings=tuple(warnings),
         files=dict(files or {}),
+        hdu_indices=dict(hdu_indices or {}),
+        header_units=dict(header_units or {}),
     )
+
+
+
+def _science_hdu_index(hdul, kind: str) -> int:
+    """Select science raster without guessing between multiple image HDUs.
+
+    Official DR9 coadds document IMAGE/INVVAR/NEXP in the primary HDU,
+    but CFITSIO tile-compressed files can also contain an empty primary
+    and a single compressed image extension. The optical mask is always
+    specified explicitly as HDU1, not the WISE masks in later extensions.
+    """
+    if kind == "maskbits":
+        if len(hdul) < 2 or getattr(hdul[1], "data", None) is None:
+            raise ValueError("Optical MASKBITS HDU1 missing or empty")
+        if hdul[1].data.ndim != 2:
+            raise ValueError("Optical MASKBITS HDU1 must be a 2D image")
+        return 1
+    primary = getattr(hdul[0], "data", None)
+    if primary is not None:
+        if getattr(primary, "ndim", None) != 2:
+            raise ValueError(f"{kind}: primary HDU is not 2D")
+        return 0
+    candidates = [
+        i for i in range(1, len(hdul))
+        if getattr(getattr(hdul[i], "data", None), "ndim", None) == 2
+    ]
+    if len(candidates) != 1:
+        raise ValueError(
+            f"{kind}: expected one 2D science image in primary or "
+            f"one unambiguous image extension, found {len(candidates)}")
+    return candidates[0]
+
 
 
 def inspect_local_brick(
@@ -201,8 +259,10 @@ def inspect_local_brick(
 ) -> CoverageResult:
     """Read downloaded original science FITS, validate WCS and inspect footprint.
 
-    IMAGE/INVVAR/NEXP use primary HDU, optical MASKBITS use HDU 1.
-    The loader never silently reprojections, interpolates or fills pixels.
+    IMAGE/INVVAR/NEXP use the primary 2D HDU where present, or a single
+    unambiguous 2D extension when the primary is empty (tile compression).
+    Optical MASKBITS must be HDU1. Actual HDU choices are recorded.
+    The loader never reprojects, interpolates or fills pixels.
     """
     from astropy.io import fits
     from astropy.wcs import WCS
@@ -221,8 +281,9 @@ def inspect_local_brick(
     with ExitStack() as stack:
         hdus = {kind: stack.enter_context(fits.open(path, memmap=True))
                 for kind, path in paths.items()}
-        hdus_main = {kind: hdus[kind][1 if kind == 'maskbits' else 0]
-                     for kind in paths}
+        indices = {kind: _science_hdu_index(hdus[kind], kind)
+                   for kind in paths}
+        hdus_main = {kind: hdus[kind][indices[kind]] for kind in paths}
         arrays = {kind: hdus_main[kind].data for kind in paths}
         if any(array is None or array.ndim != 2 for array in arrays.values()):
             raise ValueError("Expected nonempty 2D image HDUs")
@@ -239,7 +300,10 @@ def inspect_local_brick(
             target_radius_arcsec=target_radius_arcsec,
             sky_inner_arcsec=sky_inner_arcsec,
             sky_outer_arcsec=sky_outer_arcsec, chunk_rows=chunk_rows,
-            files={k: str(v.resolve()) for k,v in paths.items()})
+            files={k: str(v.resolve()) for k,v in paths.items()},
+            hdu_indices=indices,
+            header_units={k: hdus_main[k].header.get("BUNIT")
+                          for k in paths})
 
 
 def save_coverage(result: CoverageResult, output: Path):
