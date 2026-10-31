@@ -198,16 +198,14 @@ def prepare_fits_explorer(*, directory: str | Path,
         "sky_outer": _world_outline(wcs, _circle_on_sky(
             field.ra_deg, field.dec_deg, sky_outer_arcsec)),
     }
-    # Fresh arrays are copies from the cutout reader, not memmaps tied to
-    # closed FITS handles. The render cache is merely display data.
-    previews = {
-        kind: rgb_for_layer(values, kind, band)
-        for kind, values in data.items()
-    }
+    # Only original source pixels are returned. The main GUI owns a bounded
+    # on-demand raster cache; do not eagerly allocate four full-size RGB
+    # layers on every FITS load. Scientific FITS remain unmodified.
+    for values in data.values():
+        values.setflags(write=False)
     return {
         "status": "DIAGNOSTIC_NOT_ADOPTED",
         "data": data,
-        "previews": previews,
         "wcs": wcs,
         "outlines": outlines,
         "hdu_indices": indices,
