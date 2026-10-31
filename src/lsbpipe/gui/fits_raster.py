@@ -111,7 +111,10 @@ def rgb_for_layer(data: np.ndarray, kind: str, band: str,
 
 def overlay_rgba(maskbits: np.ndarray, band: str, *,
                  show_satur: bool, show_medium: bool,
-                 show_galaxy: bool) -> np.ndarray:
+                 show_galaxy: bool, show_invalid: bool = False,
+                 image: np.ndarray | None = None,
+                 invvar: np.ndarray | None = None,
+                 nexp: np.ndarray | None = None) -> np.ndarray:
     """Transparent, priority-ordered per-bit viewer overlay (not a mask)."""
     bits = maskbits_to_uint(maskbits)
     overlay = np.zeros((*bits.shape, 4), dtype=np.uint8)
@@ -125,6 +128,22 @@ def overlay_rgba(maskbits: np.ndarray, band: str, *,
         flagged = (bits & np.uint32(1 << LEGACY_BITS[name])) != 0
         overlay[flagged, :3] = color
         overlay[flagged, 3] = 115
+    if show_invalid:
+        if any(layer is None for layer in (image, invvar, nexp)):
+            raise ValueError("Invalidity overlay requires IMAGE, INVVAR and NEXP")
+        if any(np.shape(layer) != bits.shape
+               for layer in (image, invvar, nexp)):
+            raise ValueError("All invalidity layers must match MASKBITS shape")
+        invalid = (
+            ~np.isfinite(image) |
+            ~np.isfinite(invvar) | (np.asarray(invvar) <= 0) |
+            ~np.isfinite(nexp) | (np.asarray(nexp) <= 0))
+        overlay[invalid, :3] = (210, 57, 217)
+        # Pixel-level crosshatch distinguishes missing data from faint flux.
+        # This is strictly a display overlay, never a science rejection map.
+        yy, xx = np.indices(bits.shape)
+        opacity = np.where((xx + yy) % 4 < 2, 170, 75).astype(np.uint8)
+        overlay[invalid, 3] = opacity[invalid]
     if show_satur:
         selected = np.uint32(
             (1 << LEGACY_BITS["SATUR_" + band.upper()]) |
