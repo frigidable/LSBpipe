@@ -226,3 +226,50 @@ touches the field border or traces an image artifact, and inspect
 a *separately downloaded* DR9 North quartet. Do not combine north
 and south as statistically independent observations. Do not
 adopt sky estimates, Sérsic parameters or magnitudes at this stage.
+
+## Fourth Windows checkpoint: independent DR9 North
+
+User downloaded and inspected the original four north r-band FITS
+for the same brick 0401p012 and center (RA 40.096208°, Dec +1.229250°).
+All four HEAD requests were HTTP_OK, and circular, square and mask
+localization analysis completed without exception. The North receipt
+hashes were not shown, so independent checksum verification is pending.
+
+| Full 5 arcmin square | DR9 North | DR9 South |
+|---|---:|---:|
+| Pixel centers | 1,311,025 | 1,311,025 |
+| Square fully enclosed in one brick | yes | yes |
+| Approximate geometric fraction | 0.9999327635 | 0.9999327635 |
+| Instrumental valid fraction | 0.9813649625 | 0.9982387826 |
+| Invalid pixels | 24,431 | 2,309 |
+| Mean positive NEXP | 2.8379158655 | 8.6835666749 |
+| NEXP median | 2 | 9 |
+| NEXP P05–P95 | 2–4 | 6–11 |
+| SATUR_R | 22,087 | 2,309 |
+| ALLMASK_R | 9,487 | 0 |
+| MEDIUM | 8,371 | 8,371 |
+| GALAXY | 14,942 | 14,942 |
+
+South has 3.05984 times the mean positive NEXP and 1.68738
+percentage points greater instrumentally usable fraction. These
+measurements alone do not measure relative limiting magnitude, PSF,
+sky or noise covariance; they do not justify stacking North and South
+or treating them as independent sets of exposures.
+
+In North, 22,087 SATUR_R plus 9,487 ALLMASK_R mask counts sum
+to 31,574 occurrences, but only 24,431 distinct square pixels
+are excluded. At least 7,143 must have both bits, with additional
+IMAGE/INVVAR/NEXP failures increasing this lower bound.
+Precise mask overlap is unavailable from marginal counts alone.
+Identical North and South MEDIUM/GALAXY marginals could be
+associated with shared external survey masks, but pixelwise equality
+has not yet been proven.
+
+New read-only module: python -m lsbpipe.surveys.compare_regions.
+It checks the original North and South WCS grids at five sky tie-points
+to within 0.001 native pixels, rejects incompatible grids rather than
+reprojecting automatically, and creates the exact common-square
+truth table for SATUR_R / ALLMASK_R, joint instrumental validity,
+MEDIUM/GALAXY position agreement, NEXP and inverse variance.
+Outputs are DIAGNOSTIC_NOT_ADOPTED, not scientific photometry.
+The module has synthetic CI tests and awaits the first real paired run.
