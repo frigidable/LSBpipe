@@ -90,8 +90,8 @@ Tests verify an SGA-marked target pixel remains scientifically
 unrejected by a bad-pixel policy; a saturated pixel does not.
 
 The original results above are measurements from the earlier user run.
-**They are not retested results from the updated code** until a new
-Windows `--inspect` run completes.
+They were subsequently retested with the updated MASKBITS census on
+Windows; see the second field-run checkpoint below.
 
 ## Next scientific acceptance steps
 
@@ -110,3 +110,42 @@ Windows `--inspect` run completes.
 Current state: **instrumental QA passed; LSB photometric adoption
 NOT established**. No sky surface brightness, asymptotic magnitude,
 Sérsic fit or galaxy/sky photometric measurement is reported.
+
+## Second Windows field-run checkpoint: numerical MASKBITS census
+
+The user subsequently ran **231/231 passing tests (8.97 s)** on the
+same feature branch and successfully exported
+qa-dr9-south-r.png from four original local FITS through the new
+WCS-registered plotting module. The PNG itself was not attached to the
+chat: its pixel-level visual interpretation is still outstanding.
+
+Recomputed original DR9 South r-band aperture census:
+
+| Named bit | Target circle (56,067 px) | Sky annulus (360,398 px) |
+|---|---:|---:|
+| GALAXY (SGA; bit 12) | 14,942 (26.6503%) | 0 |
+| MEDIUM (Gaia G<16 locus; bit 11) | 0 | 178 (0.04939%) |
+| NPRIMARY, BRIGHT, CLUSTER, BAILOUT | 0 | 0 |
+| SATUR_R, ALLMASK_R | 0 | 0 |
+
+Real output warnings: TARGET_SGA_GALAXY_BIT_PRESENT_DO_NOT_AUTOMASK
+and SKY_ANNULUS_MEDIUM_WARNING. The official DR9 bitmask reference
+(https://www.legacysurvey.org/dr9/bitmasks/) explains MEDIUM as
+a Gaia star G<16 radius-magnitude footprint with a radius twice
+the BRIGHT mask at the same magnitude. Therefore 178 sky-annulus
+pixels require spatial contamination assessment; a zero hard-instrument
+mask does not mean the sky is photometrically clean.
+
+The user reports successful PNG creation, but neither the figure pixels
+nor spatial association of the SGA region have yet been visually checked.
+
+## Full 5′ square follow-up
+
+Added --inspect-square to the pilot CLI. It measures the original
+sky-coordinate square, with exact WCS pixel-center selection, a separate
+polygon-within-single-brick check, instrumentally usable fractions,
+pixel-level exposure percentiles and individual MASKBITS counts.
+The full-square values are NOT yet measured on the user's real FITS
+at the time of writing. The old 35″ circle and sky-ring results
+must not be substituted for this square assessment. See
+docs/REAL_FITS_PILOT_P3.md for reproducible Windows commands.
