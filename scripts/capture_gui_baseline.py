@@ -66,6 +66,8 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
         "coverage_button": window.qa_btn,
         "download_button": window.download_btn,
         "web_viewer_placeholder": window.sky,
+        "science_qa_tab": window.science_qa,
+        "science_qa_result": window.science_qa.result,
     }
     viewer_share = _bounds(splitter.widget(1), window)["width"] / width
     if viewer_share < 0.55:
@@ -73,7 +75,7 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
             f"{state} viewer insufficient at {width}x{height}: "
             f"{viewer_share:.1%} (minimum 55%)")
     visible_table_height = 0
-    if state != "S0":
+    if state not in ("S0", "S4"):
         table_bounds = _bounds(window.files, window)
         viewport_bounds = _bounds(window.data_scroll.viewport(), window)
         visible_table_height = max(
@@ -92,6 +94,13 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
             raise AssertionError(
                 f"{state} Download selected action is not reachable "
                 f"within the {width}x{height} window: {primary}")
+    if state == "S4":
+        if window.inspector_tabs.currentWidget() is not window.science_qa:
+            raise AssertionError("S4 Science QA tab not selected")
+        if not window.science_qa.result.isVisible():
+            raise AssertionError("S4 Science QA result text clipped/hidden")
+        if not window.science_qa.buttons["square"].isVisible():
+            raise AssertionError("S4 Science QA square action unreachable")
     report = {
         "state": state + "_offline_synthetic",
         "viewer_width_fraction": round(viewer_share, 4),
@@ -106,6 +115,8 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
         "network_used": False,
         "viewer_content": "BLANK_OFFLINE_PLACEHOLDER_NOT_SURVEY_IMAGERY",
         "scientific_status": "NO_SCIENCE_RESULT",
+        "science_workbench_visible": (
+            window.inspector_tabs.currentWidget() is window.science_qa),
         "splitter": _bounds(splitter, window),
         "regions": {
             "control_panel": _bounds(splitter.widget(0), window),
@@ -164,7 +175,7 @@ def main():
     # Fresh widget instance for every state: no inadvertent selection/resize
     # carryover between screenshots, but all components are real Qt widgets.
     with offline_legacy_viewer():
-        for state in ("S0", "S1", "S2", "S3"):
+        for state in ("S0", "S1", "S2", "S3", "S4"):
             window = SurveyExplorer()
             try:
                 # Exercise the populated-state transition AFTER Qt has shown
@@ -186,7 +197,8 @@ def main():
         "screens": reports,
         "limitations": [
             "WebEngine intentionally replaced by a blank local offline placeholder",
-            "All catalog and product S1–S3 data are synthetic fixtures",
+            "All catalog and product S1–S4 data are synthetic fixtures",
+            "S4 QA text is mock UI content; no FITS are opened",
             "Offscreen Qt capture cannot verify real monitor / DPI rendering",
             "This job does not certify accessibility or scientific validity",
         ],
