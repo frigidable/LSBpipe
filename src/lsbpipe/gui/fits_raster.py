@@ -93,6 +93,19 @@ def overlay_rgba(maskbits: np.ndarray, band: str, *,
         flagged = (bits & np.uint32(1 << LEGACY_BITS[name])) != 0
         overlay[flagged, :3] = color
         overlay[flagged, 3] = 115
+    # Backward compatibility for previous combined SATUR/ALLMASK toggle.
+    if show_allmask is None:
+        show_allmask = show_satur
+    # Match QUALITY's precedence: ALLMASK outranks SATUR, and
+    # numerical invalidity outranks both. Visual toggles remain independent.
+    for enabled, prefix, color in (
+            (show_satur, "SATUR", OVERLAY_RGB["SATUR"]),
+            (show_allmask, "ALLMASK", OVERLAY_RGB["ALLMASK"])):
+        if enabled:
+            flagged = (bits & np.uint32(
+                1 << LEGACY_BITS[prefix + "_" + band.upper()])) != 0
+            overlay[flagged, :3] = color
+            overlay[flagged, 3] = 175
     if show_invalid:
         if any(layer is None for layer in (image, invvar, nexp)):
             raise ValueError("Invalidity overlay requires IMAGE, INVVAR and NEXP")
@@ -109,17 +122,6 @@ def overlay_rgba(maskbits: np.ndarray, band: str, *,
         yy, xx = np.nonzero(invalid)
         overlay[yy, xx, 3] = np.where(
             (xx + yy) % 4 < 2, 170, 75).astype(np.uint8)
-    # Backward compatibility for previous combined SATUR/ALLMASK toggle.
-    if show_allmask is None:
-        show_allmask = show_satur
-    for enabled, prefix, color in (
-            (show_allmask, "ALLMASK", OVERLAY_RGB["ALLMASK"]),
-            (show_satur, "SATUR", OVERLAY_RGB["SATUR"])):
-        if enabled:
-            flagged = (bits & np.uint32(
-                1 << LEGACY_BITS[prefix + "_" + band.upper()])) != 0
-            overlay[flagged, :3] = color
-            overlay[flagged, 3] = 175
     return overlay
 
 
