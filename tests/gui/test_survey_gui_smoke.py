@@ -553,8 +553,9 @@ def test_science_qa_uses_selected_brick_and_pasted_target_without_requery(
     assert w.science_qa.directory.text() == str(folder)
     assert w.science_qa.north_directory.text() == str(folder)
     evidence = {}
-    def inline(action, finished):
+    def inline(action, finished, on_error=None):
         evidence["threaded"] = False
+        assert callable(on_error)
         finished(action(None))
     with patch.object(w, "_start", side_effect=inline), patch(
             "lsbpipe.gui.survey_explorer.run_science_qa_backend") as core:
