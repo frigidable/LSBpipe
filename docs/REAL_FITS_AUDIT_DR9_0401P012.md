@@ -273,3 +273,98 @@ truth table for SATUR_R / ALLMASK_R, joint instrumental validity,
 MEDIUM/GALAXY position agreement, NEXP and inverse variance.
 Outputs are DIAGNOSTIC_NOT_ADOPTED, not scientific photometry.
 The module has synthetic CI tests and awaits the first real paired run.
+
+## Fifth Windows checkpoint — native-grid paired North/South audit
+
+Operator independently ran the new strict comparator after updating
+feature/real-fits-pilot-p3 to commit 64ef9ba3:
+
+- 250 tests passed on Windows in 21.57 seconds.
+- Four original DR9 North and South FITS quartets were compared without
+  resampling, interpolation, stacking or treating region labels as
+  independent observational replicates.
+- Native WCS comparison status: PASSED_0.001_PIX_TIE_POINTS.
+- Exact common TAN-square sample: 1,311,025 pixel centers.
+
+### Paired instrumental validity, exact integer truth table
+
+| Status at the same pixel | Pixel centers | Fraction of whole square |
+|---|---:|---:|
+| Both reductions valid | 1,286,594 | 98.136496% |
+| North valid, South invalid | 0 | 0% |
+| South valid, North invalid | 22,122 | 1.687382% |
+| Neither valid | 2,309 | 0.176122% |
+
+Therefore North's accepted-pixel set is a strict subset of South's
+accepted-pixel set under the current conservative quality rule.
+These exact 22,122 additional South-valid pixels explain the
+1.687382 percentage point difference in valid fractions. This
+conclusion is **specific to one r-band square and to the currently
+implemented IMAGE finite / INVVAR positive / NEXP positive /
+SATUR_R and ALLMASK_R exclusion policy**.
+
+### North SATUR_R and ALLMASK_R truth table
+
+| North pixel category | Count |
+|---|---:|
+| SATUR_R only | 14,944 |
+| ALLMASK_R only | 2,344 |
+| BOTH SATUR_R and ALLMASK_R | 7,143 |
+| Either flag / rejected pixels | 24,431 |
+| Additional numeric-quality failure outside flags | 0 |
+
+South contains 2,309 SATUR_R-only pixels, no ALLMASK_R, and no
+numeric-only failures. Paired bit overlap verifies:
+
+- SATUR_R: both = 2,292; North-only = 19,795; South-only = 17.
+- ALLMASK_R: both = 0; North-only = 9,487; South-only = 0.
+- MEDIUM: both = 8,371; either-only = 0.
+- GALAXY: both = 14,942; either-only = 0.
+
+North and South external-catalog footprint bits thus agree exactly
+**per pixel** on the measured square. Identical flags do not prove
+anything about the true galaxy morphology or Gaia source identity.
+All South-invalid pixels are also North-invalid, including the 17
+South-only SATUR_R pixels which must have some North quality flag.
+
+### Paired NEXP and INVVAR
+
+Exactly 1,299,609 pixels have positive NEXP in BOTH coadds. Among
+them South NEXP > North NEXP at every pixel, no ties and no North
+advantages. North has 1,299,609 positive-NEXP pixels, South
+1,311,025; the 11,416 North nonpositive-NEXP pixel centers all lie
+inside North's 24,431 invalid pixels according to the comparator.
+
+Of those same 1,299,609 common-positive-weight INVVAR pixels,
+South INVVAR exceeds North at 1,292,052 centers (99.418517%);
+North exceeds South at 7,557 centers (0.581483%). No ties.
+These comparisons are raw coadd INVVAR descriptions, not
+correlated-noise-adjusted S/N or faint-source uncertainty estimates.
+Mean positive NEXP values remain North=2.837915865464151 and
+South=8.68356667492992, with a ratio of 3.05983936.
+
+**Evidence decision:** DR9 South should be the **provisional
+instrumentally preferred r-band original input** for this exact
+5-arcmin field. Neither North nor South is yet a photometrically
+adopted science product. This evidence does NOT establish sky
+stability, PSF uniformity, reliable LSB surface brightness, Sérsic
+photometry, calibrated covariance, nor independent imaging origin.
+
+### Scientific exit gate and next work package
+
+The North/South instrument-comparison objective is met. Before
+launching quantitative low-surface-brightness photometry:
+
+1. Check origin/provenance and exposure overlap using survey CCD
+   tables, not merely NEXP or region label.
+2. Estimate coadd PSF and stellar wings in both reductions, with
+   explicit spatial, bright-star and saturation diagnostics.
+3. Segment contaminating sources; treat SGA GALAXY as a possible
+   target footprint, not a generic invalid pixel.
+4. Model sky residuals with multiple independent empty regions,
+   mask-growth sensitivity and a spatial structure/residual audit.
+5. Propagate resampling-correlated noise and background-model
+   systematic uncertainty; validate with artificial LSB injection.
+
+Official survey reference: https://www.legacysurvey.org/dr9/files/
+and https://www.legacysurvey.org/dr9/bitmasks/ .
