@@ -559,11 +559,11 @@ def test_science_qa_uses_selected_brick_and_pasted_target_without_requery(
         finished(action(None))
     with patch.object(w, "_start", side_effect=inline), patch(
             "lsbpipe.gui.survey_explorer.run_science_qa_backend") as core:
-        core.return_value = {
+        core.side_effect = lambda *a, **k: {
             "action":"square", "status":"DIAGNOSTIC_NOT_ADOPTED",
             "summary":"Original square: 98% instrumentally usable",
             "path":str(tmp_path/"qa-reports"/"square.json"),
-            "is_figure":False,
+            "is_figure":False, "context":k["context"],
             "provenance":("dr9","north",w.hits[0].name,"r")}
         w.start_science_qa("square")
         core.assert_called_once()
@@ -636,3 +636,67 @@ def test_qa_fields_remain_scrollable_at_laptop_size(offline_explorer, qtbot):
     assert w.science_qa.width() > 250
     assert w.science_qa.buttons["square"].isEnabled()
     assert w.sky.width() >= w.width() * 0.55
+
+
+
+def test_science_run_rejects_changed_radii_even_if_restored(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.science_qa.directory.setText(str(tmp_path/"original-data"))
+    pending = []
+    def defer(action, callback, on_error=None):
+        pending.append((action, callback, on_error))
+    with patch.object(w, "_start", side_effect=defer):
+        w.start_science_qa("square")
+    assert len(pending) == 1
+    snapshot = w._current_science_context("square")
+    assert snapshot is not None
+    previous_ticket = w._qa_generation
+    value = w.target_radius.value()
+    w.target_radius.setValue(value + 1.)
+    w.target_radius.setValue(value)
+    assert w._qa_generation > previous_ticket
+    assert w._current_science_context("square") == snapshot
+    pending[0][1]({
+        "action":"square", "status":"DIAGNOSTIC_NOT_ADOPTED",
+        "summary":"STALE INCORRECT SCIENCE",
+        "path":str(tmp_path/"old.json"), "is_figure":False,
+        "context":snapshot,
+        "provenance":("dr9","north",w.hits[0].name,"r")})
+    assert "STALE" not in w.science_qa.result.toPlainText()
+    assert not w.science_qa.open_report.isEnabled()
+
+
+def test_editing_fits_folder_invalidates_previous_saved_result(
+        offline_explorer, tmp_path):
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.science_qa.show_result({
+        "summary":"Last old aperture", "path":str(tmp_path/"old.json"),
+        "is_figure":False})
+    assert w.science_qa.open_report.isEnabled()
+    ticket = w._qa_generation
+    w.science_qa.directory.setText(str(tmp_path/"new-root"))
+    assert w._qa_generation > ticket
+    assert not w.science_qa.open_report.isEnabled()
+    assert "Last old aperture" not in w.science_qa.result.toPlainText()
+
+
+def test_changing_band_or_north_folder_invalidates_loaded_fits(
+        offline_explorer, tmp_path):
+    from tests.gui.test_fits_explorer_gui import synthetic_dataset
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.fits_explorer.set_dataset(synthetic_dataset())
+    assert w.fits_explorer._dataset is not None
+    w.science_qa.north_directory.setText(str(tmp_path/"other-north"))
+    assert w.fits_explorer._dataset is None
+    assert not w.science_qa.open_report.isEnabled()
+    w.fits_explorer.set_dataset(synthetic_dataset())
+    # The synthetic selected brick has r/g/z band inventory.
+    old = w.science_qa.current_band()
+    next_band = "g" if old != "g" else "r"
+    w.science_qa.band.setCurrentText(next_band)
+    assert w.fits_explorer._dataset is None
