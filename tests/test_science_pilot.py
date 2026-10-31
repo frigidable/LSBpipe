@@ -289,3 +289,52 @@ def test_failing_fits_qa_persists_failure_without_erasing_probe(
     assert report["http_evidence"] == {"HTTP_OK": 4}
     assert report["http_evidence_source"] == "PREVIOUS_RUN_NOT_RECHECKED"
     assert (tmp_path/"pilot-probe.json").exists()
+
+
+
+def test_square_only_inspection_uses_local_files_without_head_or_get(
+        tmp_path, monkeypatch):
+    from lsbpipe.surveys import square_coverage
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.probe_product",
+        lambda *args, **kwargs: pytest.fail("Inspect square must not call HEAD"))
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.download_manifest",
+        lambda *args, **kwargs: pytest.fail("Inspect square must not download"))
+    calls = []
+    def inspect(directory, *, release, region, brick, band, field):
+        calls.append((directory, release, region, brick, band, field))
+        return {"status": "DIAGNOSTIC_NOT_ADOPTED",
+                "polygon_within_single_brick": True}
+    def save(report, path):
+        path.write_text(json.dumps(report), encoding="utf-8")
+        return path
+    monkeypatch.setattr(square_coverage, "inspect_local_square", inspect)
+    monkeypatch.setattr(square_coverage, "save_square_coverage", save)
+    result = run_science_pilot(
+        FIELD, hits(), release="dr9", region="south",
+        brick="0401p012", band="r", directory=tmp_path,
+        inspect_square=True)
+    assert result["state"] == "SQUARE_FITS_QA_DIAGNOSTIC_NOT_ADOPTED"
+    assert result["http_evidence_source"] == "NOT_CHECKED"
+    assert len(calls) == 1
+    assert calls[0][0] == tmp_path / "data"
+    assert calls[0][-1] == FIELD
+    assert json.loads((tmp_path / "pilot-square-coverage.json").read_text(
+        "utf-8"))["polygon_within_single_brick"] is True
+
+
+def test_square_failure_produces_durable_failed_report(tmp_path, monkeypatch):
+    from lsbpipe.surveys import square_coverage
+    def refuse(*args, **kwargs):
+        raise ValueError("Malformed original square WCS")
+    monkeypatch.setattr(square_coverage, "inspect_local_square", refuse)
+    with pytest.raises(ValueError, match="WCS"):
+        run_science_pilot(
+            FIELD, hits(), release="dr9", region="south",
+            brick="0401p012", band="r", directory=tmp_path,
+            inspect_square=True)
+    recorded = json.loads((tmp_path/"pilot-report.json").read_text("utf-8"))
+    assert recorded["state"] == "SQUARE_FITS_QA_FAILED"
+    assert "WCS" in recorded["square_inspection_error"]
+    assert not (tmp_path/"pilot-square-coverage.json").exists()
