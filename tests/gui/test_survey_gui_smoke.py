@@ -699,3 +699,40 @@ def test_changing_band_or_north_folder_invalidates_loaded_fits(
     next_band = "g" if old != "g" else "r"
     w.science_qa.band.setCurrentText(next_band)
     assert w.fits_explorer._dataset is None
+
+
+
+def test_science_workflow_groups_inspect_masks_and_dr9_comparison(
+        offline_explorer, qtbot):
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.inspector_tabs.setCurrentWidget(w.science_qa)
+    qa = w.science_qa
+    assert qa.steps.count() == 3
+    assert qa.steps.currentIndex() == 0
+    assert qa.buttons["square"].isVisible()
+    assert qa.buttons["explore"].isVisible()
+    assert not qa.buttons["compare"].isVisible()
+    assert qa.selection_label.text().startswith("DR9 · north")
+    qa.steps.setCurrentIndex(1)
+    assert qa.buttons["masks"].isVisible()
+    assert not qa.buttons["square"].isVisible()
+    qa.steps.setCurrentIndex(2)
+    assert qa.buttons["compare"].isVisible()
+    assert qa.north_directory.isVisible()
+    assert qa.south_directory.isVisible()
+    qa.mark_running("compare")
+    assert "Running" in qa.steps.itemText(2)
+    qa.show_error("Synthetic WCS mismatch")
+    assert "Failed" in qa.steps.itemText(2)
+    assert "Synthetic WCS mismatch" in qa.result.toPlainText()
+    qa.mark_running("square")
+    assert qa.steps.currentIndex() == 0
+    qa.show_result({
+        "summary":"Synthetic coverage", "path":"C:/mock/report.json",
+        "is_figure":False, "run_id":"MOCK-DO-NOT-ADOPT"})
+    assert "Diagnostic saved" in qa.steps.itemText(0)
+    qa.directory.setText("C:/another-folder")
+    assert qa.steps.itemText(0) == qa._step_names[0]
+    assert qa.steps.itemText(2) == qa._step_names[2]
+    assert not qa.open_report.isEnabled()
