@@ -135,3 +135,33 @@ def test_rejects_non_diagnostic_or_unregistered_science(explorer):
     report["data"]["nexp"] = np.ones((2,2))
     with pytest.raises(ValueError, match="share a 2D pixel grid"):
         explorer.set_dataset(report)
+
+
+
+def test_no_data_visually_distinct_from_valid_zero_and_toggleable(explorer):
+    dataset = synthetic_dataset()
+    dataset["data"]["image"][2, 3] = np.nan
+    dataset["data"]["image"][1, 1] = 0.  # real finite zero flux
+    dataset["data"]["invvar"][3, 4] = 0.
+    dataset["data"]["nexp"][4, 5] = 0
+    explorer.set_dataset(dataset)
+    assert explorer.flags["INVALID"].isChecked()
+
+    # Qt display row = ny - 1 - FITS row.
+    img = explorer.invalid_item.pixmap().toImage()
+    assert img.pixelColor(3, 3).alpha() > 0
+    assert img.pixelColor(1, 4).alpha() == 0
+
+    explorer.layer.setCurrentIndex(1)  # INVVAR
+    iv = explorer.invalid_item.pixmap().toImage()
+    assert iv.pixelColor(4, 2).alpha() > 0
+
+    explorer.layer.setCurrentIndex(2)  # NEXP
+    exp = explorer.invalid_item.pixmap().toImage()
+    assert exp.pixelColor(5, 1).alpha() > 0
+
+    explorer.flags["INVALID"].setChecked(False)
+    hidden = explorer.invalid_item.pixmap().toImage()
+    assert hidden.pixelColor(5, 1).alpha() == 0
+    assert dataset["data"]["invvar"][3, 4] == 0.
+    assert dataset["data"]["nexp"][4, 5] == 0
