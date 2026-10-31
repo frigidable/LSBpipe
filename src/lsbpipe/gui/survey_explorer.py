@@ -1326,6 +1326,9 @@ class SurveyExplorer(QMainWindow):
             return
         self.fits_explorer.set_dataset(dataset)
         self.preview_tabs.setCurrentWidget(self.fits_explorer)
+        # An interactive view is not a new saved science report; do not
+        # leave an old unrelated JSON report button looking current.
+        self.science_qa.clear_result()
         self.science_qa.result.setPlainText(
             f"{dataset['source']} · original four-HDU FITS cutout\n"
             f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} pixels\n"
