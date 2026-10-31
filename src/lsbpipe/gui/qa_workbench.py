@@ -9,6 +9,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout, QPushButton,
     QComboBox, QFileDialog, QPlainTextEdit, QScrollArea, QSizePolicy,
+    QToolBox,
 )
 
 from lsbpipe.surveys.legacy import BrickHit
@@ -70,43 +71,80 @@ class ScienceQAControls(QWidget):
             "Choose the folder that contains dr9/.../coadd, or its pilot "
             "parent containing a data/ subfolder. FITS are never modified.")
 
-        layout.addWidget(QLabel("Local scientific operations"))
+        # Progressive scientific workflow: keep source provenance above,
+        # and keep the diagnostics/result below, without mixing the paired
+        # North/South file selectors into ordinary one-brick inspection.
+        self.steps = QToolBox()
+        self.steps.setObjectName("science_qa_workflow")
+        self._step_names = (
+            "1 · Inspect FITS",
+            "2 · Review masks",
+            "3 · Compare reductions",
+        )
+        self._active_step = None
+        self._step_for_action = {
+            "square": 0, "explore": 0, "figure": 0,
+            "masks": 1, "compare": 2,
+        }
         self.buttons = {}
+
+        inspect_page = QWidget()
+        inspect_layout = QVBoxLayout(inspect_page)
+        inspect_layout.setContentsMargins(5, 8, 5, 8)
+        inspect_layout.setSpacing(6)
+        intro = QLabel(
+            "Screen the full search square, then inspect the four original "
+            "FITS layers with WCS and display-only mask overlays.")
+        intro.setWordWrap(True)
+        inspect_layout.addWidget(intro)
         for key, caption, tooltip in (
             ("square", "Check full search square",
-             "Original-FITS WCS coverage, NEXP and per-bit fractions"),
-            ("masks", "Locate mask footprints",
-             "Find connected GALAXY/MEDIUM/SATUR regions in sky coordinates"),
+             "Instrumental coverage and NEXP over the requested TAN square"),
             ("explore", "Explore original FITS interactively",
-             "Pixel readout in ICRS, zoom, layers and on/off mask overlays"),
+             "Zoom, pan, layers, ICRS pixel readout and mask warnings"),
             ("figure", "Export four-layer FITS map",
-             "Save a static four-panel WCS figure, read-only"),
-            ("compare", "Compare DR9 North / South",
-             "Compare only identical native WCS pixel centers; no stacking"),
+             "Read-only WCS-aligned static diagnostic PNG"),
         ):
-            button = QPushButton(caption)
-            button.setObjectName("science_action_" + key)
-            button.setToolTip(tooltip)
-            button.clicked.connect(lambda _, action=key: self.requested.emit(action))
-            layout.addWidget(button)
-            self.buttons[key] = button
+            self._add_action(inspect_layout, key, caption, tooltip)
+        self.steps.addItem(inspect_page, self._step_names[0])
 
-        pair_label = QLabel("North / South originals (paired comparison)")
-        pair_label.setWordWrap(True)
-        layout.addWidget(pair_label)
+        masks_page = QWidget()
+        masks_layout = QVBoxLayout(masks_page)
+        masks_layout.setContentsMargins(5, 8, 5, 8)
+        masks_layout.setSpacing(6)
+        mask_note = QLabel(
+            "Locate original SGA GALAXY, Gaia MEDIUM, SATUR and ALLMASK "
+            "footprints. These are diagnostic warnings, not target masks.")
+        mask_note.setWordWrap(True)
+        masks_layout.addWidget(mask_note)
+        self._add_action(
+            masks_layout, "masks", "Locate mask footprints",
+            "Connected tagged regions, sky centroids and aperture overlaps")
+        self.steps.addItem(masks_page, self._step_names[1])
+
+        compare_page = QWidget()
+        compare_layout = QVBoxLayout(compare_page)
+        compare_layout.setContentsMargins(5, 8, 5, 8)
+        compare_layout.setSpacing(6)
+        compare_note = QLabel(
+            "DR9 North / South: select two separate original-FITS roots. "
+            "Reject WCS mismatch; do not stack coadds as independent data.")
+        compare_note.setWordWrap(True)
+        compare_layout.addWidget(compare_note)
         self.north_directory, north = self._directory_row(
             "science_north_root", "North pilot folder or data/")
-        layout.addLayout(north)
+        compare_layout.addLayout(north)
         self.south_directory, south = self._directory_row(
             "science_south_root", "South pilot folder or data/")
-        layout.addLayout(south)
+        compare_layout.addLayout(south)
+        self._add_action(
+            compare_layout, "compare", "Compare DR9 North / South",
+            "Exact common WCS pixel centers, masks, NEXP and INVVAR")
+        self.steps.addItem(compare_page, self._step_names[2])
+        self.steps.setCurrentIndex(0)
+        layout.addWidget(self.steps)
         for entry in (self.directory, self.north_directory, self.south_directory):
             entry.textChanged.connect(self._context_edited)
-        help_text = QLabel(
-            "Select the same DR9 brick and band. The comparator rejects "
-            "different native WCS grids instead of silently reprojecting.")
-        help_text.setWordWrap(True)
-        layout.addWidget(help_text)
 
         layout.addWidget(QLabel("Latest diagnostic"))
         self.result = QPlainTextEdit()
@@ -131,6 +169,27 @@ class ScienceQAControls(QWidget):
         layout.addWidget(self.open_manifest)
         layout.addStretch()
         self._update_enabled()
+
+    def _add_action(self, layout, key, caption, tooltip):
+        button = QPushButton(caption)
+        button.setObjectName("science_action_" + key)
+        button.setToolTip(tooltip)
+        button.clicked.connect(
+            lambda _, action=key: self.requested.emit(action))
+        layout.addWidget(button)
+        self.buttons[key] = button
+
+    def mark_running(self, action: str):
+        step = self._step_for_action[action]
+        self._active_step = step
+        self.steps.setCurrentIndex(step)
+        self.steps.setItemText(step, self._step_names[step] + " · Running")
+
+    def _finish_step(self, status: str):
+        if self._active_step is not None:
+            step = self._active_step
+            self.steps.setItemText(step, self._step_names[step] + " · " + status)
+            self._active_step = None
 
     def _directory_row(self, name, placeholder):
         entry = QLineEdit()
@@ -207,6 +266,7 @@ class ScienceQAControls(QWidget):
                 (name != "compare" or self._hit.release == "dr9"))
 
     def show_result(self, result: dict):
+        self._finish_step("Diagnostic saved")
         run_id = result.get("run_id")
         manifest = result.get("manifest_path")
         receipt = (
@@ -224,6 +284,7 @@ class ScienceQAControls(QWidget):
         self.open_report.setEnabled(True)
 
     def show_error(self, error: str):
+        self._finish_step("Failed")
         self._last_path = None
         self._last_manifest_path = None
         self.open_report.setEnabled(False)
@@ -231,6 +292,10 @@ class ScienceQAControls(QWidget):
         self.result.setPlainText("Scientific QA failed:\n" + error)
 
     def clear_result(self):
+        self._active_step = None
+        if hasattr(self, "steps"):
+            for step, name in enumerate(self._step_names):
+                self.steps.setItemText(step, name)
         self._last_path = None
         self._last_manifest_path = None
         self.open_report.setEnabled(False)
