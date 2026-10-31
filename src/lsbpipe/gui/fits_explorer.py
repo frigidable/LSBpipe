@@ -433,8 +433,8 @@ class FITSExplorer(QWidget):
             return
         self._render_requested = None
         generation, dataset, base_key, overlay_key = request
-        kind, contrast = base_key[1:]
-        flags = overlay_key[1:]
+        _, kind, contrast, scaling, limits = base_key
+        flags = (False, False, False, False, False, False) if kind == "quality" else overlay_key[1:]
         base = self._raster_cache.get(base_key)
         overlay = self._raster_cache.get(overlay_key)
         self._render_active = (generation, dataset, base_key, overlay_key)
@@ -442,14 +442,16 @@ class FITSExplorer(QWidget):
         # Large original data are converted to display RGB off the UI thread.
         if dataset["pixel_shape"][0] * dataset["pixel_shape"][1] <= 120_000:
             try:
-                rgb, rgba = self._compute_display(
-                    dataset, kind, contrast, flags, base, overlay)
+                rgb, rgba, info = self._compute_display(
+                    dataset, kind, contrast, flags, base, overlay,
+                    scaling=scaling, limits=limits)
             except Exception as exc:
                 self.render_status.setText(
                     f"Display rendering failed: {type(exc).__name__}: {exc}")
             else:
                 self._finish_render(
-                    generation, dataset, base_key, overlay_key, rgb, rgba)
+                    generation, dataset, base_key, overlay_key, rgb, rgba,
+                    info)
             self._render_active = None
             if self._render_requested is not None:
                 self._start_render()
@@ -458,7 +460,7 @@ class FITSExplorer(QWidget):
             "Preparing display in background · original pixels unchanged…")
         self._render_future = self._render_executor.submit(
             self._compute_display, dataset, kind, contrast,
-            flags, base, overlay)
+            flags, base, overlay, scaling, limits)
         self._render_timer.start()
 
     def _poll_render(self):
@@ -469,21 +471,22 @@ class FITSExplorer(QWidget):
         generation, dataset, base_key, overlay_key = self._render_active
         self._render_active = None
         try:
-            rgb, rgba = future.result()
+            rgb, rgba, info = future.result()
         except Exception as exc:
             if generation == self._render_generation:
                 self.render_status.setText(
                     f"Display rendering failed: {type(exc).__name__}: {exc}")
         else:
             self._finish_render(
-                generation, dataset, base_key, overlay_key, rgb, rgba)
+                generation, dataset, base_key, overlay_key, rgb, rgba,
+                info)
         if self._render_requested is not None:
             self._start_render()
         else:
             self._render_timer.stop()
 
     def _finish_render(self, generation, dataset, base_key, overlay_key,
-                       rgb, rgba):
+                       rgb, rgba, info):
         if generation != self._render_generation or dataset is not self._dataset:
             return
         self._raster_cache.put(base_key, rgb)
@@ -494,6 +497,23 @@ class FITSExplorer(QWidget):
         if self._displayed_overlay_key != overlay_key:
             self.overlay_item.setPixmap(self._pixmap(rgba, alpha=True))
             self._displayed_overlay_key = overlay_key
+        kind = base_key[1]
+        if info is None:
+            if kind == "quality":
+                self.range_info.setText(
+                    "QUALITY · categorical: valid / warning / SATUR / "
+                    "ALLMASK / numeric invalid · no science adoption")
+            else:
+                self.range_info.setText("MASKBITS · categorical bitmask display")
+        else:
+            lo, hi, mode = info
+            unit = ("nanomaggy" if kind == "image" else
+                    "1/nanomaggy²" if kind == "invvar" else "exposures")
+            additional = (" · nonpositive IMAGE hidden by log display"
+                          if kind == "image" and mode == "log" else "")
+            self.range_info.setText(
+                f"{kind.upper()} · {mode} · {lo:.6g} … {hi:.6g} "
+                f"{unit}{additional} · display only")
         self.render_status.setText(
             "Full-resolution original pixels · "
             f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} · "
