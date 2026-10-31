@@ -186,3 +186,50 @@ Scientific result summaries, run ID, JSON/PNG and provenance manifest
 remain accessible below the workflow. This is a navigation structure
 only: no sky subtraction, photometric source masking or scientifically
 adopted surface brightness is introduced.
+
+## Quantitative FITS display, explicit flags and quality screening (P1.2)
+
+Interactive local FITS Explorer now separates display-level transformations
+from the original numerical coadd. IMAGE offers linear/asinh/log display,
+INVVAR linear/log, NEXP linear only. A physically labeled vmin/vmax can be
+entered in native IMAGE nanomaggies, INVVAR 1/nanomaggy^2 or NEXP counts.
+Automatic percentiles retain a bounded deterministic sample; scale endpoints
+and a matching native-unit colorbar appear alongside the image. Manual
+ranges are explicit, never written back to FITS, and changing them does
+not change science masking or sky estimates. Logarithmic IMAGE display
+does not add an arbitrary offset to negative sky-subtracted flux: nonpositive
+IMAGE samples display black in log mode, with a visible warning.
+
+Independent toggles are available for the selected band:
+SATUR_B (saturated in at least one individual exposure), ALLMASK_B,
+Gaia/Tycho BRIGHT, Gaia MEDIUM, SGA GALAXY, and numerical IMAGE/INVVAR/NEXP
+invalidity. Overlays are diagnostic only, including the SGA footprint.
+Bit overlap is resolved visually by explicit painter priority; hidden
+color beneath an overlapping flag is not evidence that another bit is
+absent. The mouse readout still lists *all* original asserted MASKBITS.
+
+The new QUALITY tab shows five mutually exclusive **diagnostic** classes:
+
+- Green: finite IMAGE, positive INVVAR and NEXP, no named catalog warning,
+  SATUR or ALLMASK bit for the selected band.
+- Amber: instrumentally acceptable but catalog BRIGHT/MEDIUM/GALAXY flagged
+  (including the potential target galaxy; never auto-excluded).
+- Red: band-specific SATUR flag, conservatively treated as exclusion.
+- Orange: band-specific ALLMASK flag, even when SATUR is also present.
+- Magenta: nonfinite IMAGE, nonpositive/nonfinite INVVAR or NEXP.
+
+Numeric-invalid takes precedence over ALLMASK, which takes precedence
+over SATUR, which takes precedence over catalog warning. The QUALITY
+counts refer to the entire WCS-compatible loaded original FITS **cutout**
+(including its display padding), not automatically to the requested 5'
+TAN square or circular photometric aperture. No new scientific image
+is created, no excluded science-mask file is written, and status remains
+`DIAGNOSTIC_NOT_ADOPTED`. The existing P3 science-core square/annulus
+statistics are still authoritative for the requested geographic region.
+
+The PySide6 controls were rearranged into three narrow horizontal rows to
+protect the 1366x768 laptop layout while retaining native-layer
+units, overlay legends and input provenance. Automatic regression tests
+cover negative values, inverse variance logs, overlapping bits, native
+vmin/vmax, no-data and categorical QA classes. Real original-FITS review
+on the user's computer remains a separate acceptance gate.
