@@ -33,6 +33,7 @@ from lsbpipe.gui.qa_workbench import ScienceQAControls
 from lsbpipe.gui.fits_explorer import FITSExplorer
 from lsbpipe.gui.fits_raster import prepare_fits_explorer
 from lsbpipe.gui.science_workflows import run_science_qa as run_science_qa_backend
+from lsbpipe.gui.qa_records import ScienceContext
 
 
 class _DiagnosticWebPage(QWebEnginePage):
@@ -133,6 +134,7 @@ class SurveyExplorer(QMainWindow):
         self._brick_overlay_features = []
         self._brick_overlay_keys = []
         self._qa_pixmap = None
+        self._qa_generation = 0
         self._last_download_root = None
         self._build_ui()
 
@@ -204,7 +206,7 @@ class SurveyExplorer(QMainWindow):
         self.target_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         target_form.addWidget(self.target_hint)
         for field in (self.ra, self.dec, self.field_width):
-            field.textEdited.connect(self._target_edited)
+            field.textChanged.connect(self._target_edited)
 
         target_form.addWidget(QLabel("Data releases"))
         releases_container = QWidget()
@@ -438,8 +440,10 @@ class SurveyExplorer(QMainWindow):
         self.inspector_tabs.addTab(drawer_body, "Archive files")
         self.science_qa = ScienceQAControls()
         self.science_qa.requested.connect(self.start_science_qa)
-        self.science_qa.band.currentTextChanged.connect(
-            self._invalidate_qa_figure)
+        self.science_qa.contextChanged.connect(
+            self._on_science_context_changed)
+        for radius in (self.target_radius, self.sky_inner, self.sky_outer):
+            radius.valueChanged.connect(self._on_science_context_changed)
         self.inspector_tabs.addTab(self.science_qa, "Science QA")
         self.data_drawer.setWidget(self.inspector_tabs)
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_drawer)
@@ -561,8 +565,7 @@ class SurveyExplorer(QMainWindow):
 
     def _target_edited(self, *_):
         if hasattr(self, "science_qa"):
-            self.science_qa.clear_result()
-            self._invalidate_qa_figure()
+            self._on_science_context_changed()
         # The existing bricks, if any, describe the previous target field.
         self.target_hint.setText(
             "Target changed · run Find data again to refresh the bricks"
@@ -1215,6 +1218,12 @@ class SurveyExplorer(QMainWindow):
             QMessageBox.warning(self, "Incomplete download",
                 f"{failures} files failed. Inspect download-report.json.")
 
+    def _on_science_context_changed(self, *_):
+        self._qa_generation += 1
+        if hasattr(self, "science_qa"):
+            self.science_qa.clear_result()
+        self._invalidate_qa_figure()
+
     def _invalidate_qa_figure(self, *_):
         if hasattr(self, "fits_explorer"):
             self.fits_explorer.clear_data()
@@ -1295,7 +1304,14 @@ class SurveyExplorer(QMainWindow):
                 self, "Invalid QA radii",
                 "Require 0 < object radius <= sky inner < sky outer <= 1200 arcsec")
             return
+        context = ScienceContext.capture(
+            action=action, field=field, hit=hit, band=band,
+            directory=directory, north_directory=north, south_directory=south,
+            target_radius_arcsec=target, sky_inner_arcsec=inner,
+            sky_outer_arcsec=outer)
+        ticket = self._qa_generation
         self.inspector_tabs.setCurrentWidget(self.science_qa)
+        self.science_qa.clear_result()
         self.message.setText("Analyzing original local FITS · " + action + "…")
         self.science_qa.result.setPlainText(
             "Computing " + action + " from original local FITS…")
@@ -1305,18 +1321,68 @@ class SurveyExplorer(QMainWindow):
                     directory=directory, field=field, hit=hit, band=band,
                     target_radius_arcsec=target,
                     sky_inner_arcsec=inner, sky_outer_arcsec=outer)
-            self._start(job, self._fits_explorer_ready,
-                        on_error=self.science_qa.show_error)
+            self._start(
+                job,
+                lambda data: self._deliver_science_result(
+                    data, context=context, ticket=ticket,
+                    callback=self._fits_explorer_ready),
+                on_error=lambda message: self._deliver_science_error(
+                    message, context=context, ticket=ticket))
         else:
             def job(progress):
                 return run_science_qa_backend(
                     action, field=field, hit=hit, band=band, directory=directory,
                     north_directory=north, south_directory=south,
                     target_radius_arcsec=target,
-                    sky_inner_arcsec=inner, sky_outer_arcsec=outer)
+                    sky_inner_arcsec=inner, sky_outer_arcsec=outer,
+                    context=context)
             # Connect errors before the worker starts.
-            self._start(job, self._science_qa_ready,
-                        on_error=self.science_qa.show_error)
+            self._start(
+                job,
+                lambda data: self._deliver_science_result(
+                    data, context=context, ticket=ticket,
+                    callback=self._science_qa_ready),
+                on_error=lambda message: self._deliver_science_error(
+                    message, context=context, ticket=ticket))
+
+    def _current_science_context(self, action):
+        if not self._brick_result_matches_target():
+            return None
+        row = self.bricks.currentRow()
+        if not (self.bricks.selectedItems() and 0 <= row < len(self.hits)):
+            return None
+        try:
+            field = self._field()
+        except ValueError:
+            return None
+        return ScienceContext.capture(
+            action=action, field=field, hit=self.hits[row],
+            band=self.science_qa.current_band(),
+            directory=self.science_qa.directory.text().strip(),
+            north_directory=self.science_qa.north_directory.text().strip(),
+            south_directory=self.science_qa.south_directory.text().strip(),
+            target_radius_arcsec=self.target_radius.value(),
+            sky_inner_arcsec=self.sky_inner.value(),
+            sky_outer_arcsec=self.sky_outer.value())
+
+    def _science_ticket_current(self, *, context, ticket):
+        return (ticket == self._qa_generation and
+                self._current_science_context(context.action) == context)
+
+    def _deliver_science_result(self, result, *, context, ticket, callback):
+        if not self._science_ticket_current(context=context, ticket=ticket):
+            self.message.setText(
+                "Previous science job finished: outdated selection ignored.")
+            return
+        if callback == self._science_qa_ready and result.get("context") != context:
+            self.science_qa.show_error(
+                "Science result has a different frozen input context.")
+            return
+        callback(result)
+
+    def _deliver_science_error(self, message, *, context, ticket):
+        if self._science_ticket_current(context=context, ticket=ticket):
+            self.science_qa.show_error(message)
 
     def _fits_explorer_ready(self, dataset):
         if not self._qa_context_current(dataset):
