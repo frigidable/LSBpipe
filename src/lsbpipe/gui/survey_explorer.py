@@ -781,7 +781,7 @@ class SurveyExplorer(QMainWindow):
             QMessageBox.information(self, "Legacy Viewer status", chr(10).join(lines))
         self.sky.page().runJavaScript(probe, done)
 
-    def _start(self, action, finished):
+    def _start(self, action, finished, on_error=None):
         if self.thread is not None:
             QMessageBox.information(self, "Busy", "Another survey operation is running.")
             return
@@ -798,6 +798,8 @@ class SurveyExplorer(QMainWindow):
         worker.failed.connect(lambda msg: (
             self.message.setText(msg),
             QMessageBox.warning(self, "Survey operation failed", msg)))
+        if on_error is not None:
+            worker.failed.connect(on_error)
         worker.progress.connect(self._progress)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -1299,9 +1301,10 @@ class SurveyExplorer(QMainWindow):
                 north_directory=north, south_directory=south,
                 target_radius_arcsec=target,
                 sky_inner_arcsec=inner, sky_outer_arcsec=outer)
-        self._start(job, self._science_qa_ready)
-        if self.worker is not None:
-            self.worker.failed.connect(self.science_qa.show_error)
+        # Connect the local result-error handler BEFORE the worker starts;
+        # fast missing-file failures must not leave the QA tab "Computing".
+        self._start(job, self._science_qa_ready,
+                    on_error=self.science_qa.show_error)
 
     def _science_qa_ready(self, result):
         self.science_qa.show_result(result)
