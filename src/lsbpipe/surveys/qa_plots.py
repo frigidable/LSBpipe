@@ -54,7 +54,7 @@ def classify_maskbits(maskbits, band: str) -> np.ndarray:
     return classes
 
 
-def _cutout_pixels(width_arcmin: float, wcs, *, padding: float = 1.30) -> int:
+def _cutout_pixels(width_arcmin: float, wcs, *, padding: float = 1.60) -> int:
     """Conservative figure viewport, not the science angular footprint."""
     if not 0 < width_arcmin <= 120:
         raise ValueError("Invalid search field width")
@@ -62,7 +62,7 @@ def _cutout_pixels(width_arcmin: float, wcs, *, padding: float = 1.30) -> int:
     scales = proj_plane_pixel_scales(wcs.celestial) * 3600.
     if not np.all(np.isfinite(scales)) or np.any(scales <= 0):
         raise ValueError("Invalid FITS WCS pixel scales")
-    # Never crop the square outline at the edge of the display.
+    # Even a rotated square fits: diagonal ratio sqrt(2), plus margin.
     pixels = int(np.ceil(width_arcmin * 60 * padding / min(scales)))
     if pixels > 4096:
         raise ValueError("Requested field exceeds conservative one-brick figure limit")
