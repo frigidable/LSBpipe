@@ -84,6 +84,39 @@ def _stretch(data: np.ndarray, *, kind: str, contrast: str) -> np.ndarray:
     return output
 
 
+
+
+def invalid_pixel_rgba(data: np.ndarray, kind: str) -> np.ndarray:
+    """Display-only magenta checkerboard over invalid/missing layer values.
+
+    A finite IMAGE flux of exactly zero is valid and stays unmarked.
+    INVVAR <= 0 and NEXP <= 0 are unavailable/instrumentally invalid
+    screening values, regardless of how dark the grayscale happens to be.
+    The alpha pattern deliberately exposes underlying spatial structure.
+    """
+    if kind not in LAYERS:
+        raise ValueError("Unknown FITS layer for invalid overlay")
+    values = np.asarray(data)
+    if values.ndim != 2:
+        raise ValueError("Invalid overlay requires a 2D FITS array")
+    if kind == "maskbits":
+        # MASKBITS are bitfields, not inverse-variance or exposure maps;
+        # nonzero bits are independently displayed by the source mask layer.
+        bad = np.zeros(values.shape, dtype=bool)
+    else:
+        bad = ~np.isfinite(values)
+        if kind in ("invvar", "nexp"):
+            bad |= values <= 0
+    result = np.zeros((*values.shape, 4), dtype=np.uint8)
+    if np.any(bad):
+        y, x = np.indices(values.shape, dtype=np.int32)
+        result[bad, :3] = (225, 55, 190)
+        # Alternate cell shades to avoid a flat pseudo-source structure.
+        result[..., 3][bad] = np.where(
+            ((x + y) % 2)[bad] == 0, 205, 125).astype(np.uint8)
+    return result
+
+
 def rgb_for_layer(data: np.ndarray, kind: str, band: str,
                   contrast: str = "standard") -> np.ndarray:
     """Return display RGB in FITS row order; GUI must invert y for screen."""
