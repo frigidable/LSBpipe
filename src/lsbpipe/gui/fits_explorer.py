@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import QTimer
 
 from .raster_cache import BoundedRasterCache
+from .display_transfer import display_range, transfer_settings
+from .quality_map import quality_classes
 
 from PySide6.QtCore import Qt, Signal, QPointF
 from PySide6.QtGui import (
@@ -20,7 +22,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox,
     QPushButton, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
-    QGraphicsPathItem, QSizePolicy,
+    QGraphicsPathItem, QSizePolicy, QLineEdit,
 )
 
 from .fits_raster import (
@@ -79,6 +81,7 @@ class FITSExplorer(QWidget):
         self._dataset = None
         self._overlays = []
         self._color_data = None
+        self._manual_ranges = {}
         self._raster_cache = BoundedRasterCache(max_bytes=48 * 1024 * 1024)
         self._render_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="lsbpipe-fits-display")
@@ -105,6 +108,7 @@ class FITSExplorer(QWidget):
             ("INVVAR · log weight", "invvar"),
             ("NEXP · contributing frames", "nexp"),
             ("MASKBITS · categories", "maskbits"),
+            ("QUALITY · diagnostic", "quality"),
         ):
             self.layer.addItem(name, kind)
         bar.addWidget(self.layer, 2)
@@ -114,6 +118,14 @@ class FITSExplorer(QWidget):
         self.contrast.addItem("Standard", "standard")
         self.contrast.addItem("Faint features", "faint")
         bar.addWidget(self.contrast, 1)
+        bar.addWidget(QLabel("Scale"))
+        self.scaling = QComboBox()
+        self.scaling.setObjectName("fits_scaling_selector")
+        for name, key in (
+                ("Auto", "auto"), ("Linear", "linear"),
+                ("Asinh", "asinh"), ("Log10", "log")):
+            self.scaling.addItem(name, key)
+        bar.addWidget(self.scaling, 1)
 
         self.fit_button = QPushButton("Fit")
         self.fit_button.setToolTip("Fit the entire local FITS cutout into view")
@@ -127,10 +139,39 @@ class FITSExplorer(QWidget):
         bar.addWidget(self.smooth)
         layout.addLayout(bar)
 
+        scale_row = QHBoxLayout()
+        scale_row.addWidget(QLabel("vmin"))
+        self.vmin = QLineEdit()
+        self.vmin.setObjectName("fits_display_vmin")
+        self.vmin.setPlaceholderText("auto")
+        self.vmin.setToolTip("Lower display limit in native FITS units")
+        scale_row.addWidget(self.vmin, 1)
+        scale_row.addWidget(QLabel("vmax"))
+        self.vmax = QLineEdit()
+        self.vmax.setObjectName("fits_display_vmax")
+        self.vmax.setPlaceholderText("auto")
+        self.vmax.setToolTip("Upper display limit in native FITS units")
+        scale_row.addWidget(self.vmax, 1)
+        self.apply_limits = QPushButton("Apply range")
+        self.apply_limits.setObjectName("fits_apply_display_range")
+        self.apply_limits.clicked.connect(self._apply_display_range)
+        scale_row.addWidget(self.apply_limits)
+        self.auto_limits = QPushButton("Auto range")
+        self.auto_limits.setObjectName("fits_reset_display_range")
+        self.auto_limits.clicked.connect(self._auto_display_range)
+        scale_row.addWidget(self.auto_limits)
+        layout.addLayout(scale_row)
+        self.range_info = QLabel("Display limits: automatic · native units")
+        self.range_info.setObjectName("fits_display_range_info")
+        self.range_info.setWordWrap(True)
+        layout.addWidget(self.range_info)
+
         toggles = QHBoxLayout()
         self.flags = {}
         for key, text, enabled in (
-            ("SATUR", "SATUR / ALLMASK", True),
+            ("SATUR", "SATUR", True),
+            ("ALLMASK", "ALLMASK", True),
+            ("BRIGHT", "Gaia BRIGHT", False),
             ("MEDIUM", "Gaia MEDIUM", True),
             ("GALAXY", "SGA GALAXY", False),
             ("INVALID", "No data / zero weight", True),
@@ -147,9 +188,10 @@ class FITSExplorer(QWidget):
         toggles.addStretch()
         layout.addLayout(toggles)
         self.color_legend = QLabel(
-            "Red: SATUR/ALLMASK  ·  Amber: Gaia MEDIUM  ·  "
-            "Blue: SGA GALAXY  ·  Magenta hatch: invalid data. "
-            "Display overlays only.")
+            "Red: SATUR  ·  Orange: ALLMASK  ·  Purple: BRIGHT  ·  "
+            "Amber: MEDIUM  ·  Blue: GALAXY  ·  Magenta: no data. "
+            "QUALITY: green valid, amber catalog warning, red/orange "
+            "instrumental rejection, magenta numeric invalid. Display only.")
         self.color_legend.setObjectName("fits_overlay_legend")
         self.color_legend.setWordWrap(True)
         layout.addWidget(self.color_legend)
@@ -194,9 +236,10 @@ class FITSExplorer(QWidget):
         self.scene.addItem(self.base_item)
         self.scene.addItem(self.overlay_item)
 
-        self.layer.currentIndexChanged.connect(self._show_layer)
+        self.layer.currentIndexChanged.connect(self._layer_changed)
         self.contrast.currentIndexChanged.connect(self._show_layer)
-        for key in ("SATUR", "MEDIUM", "GALAXY", "INVALID"):
+        self.scaling.currentIndexChanged.connect(self._show_layer)
+        for key in ("SATUR", "ALLMASK", "BRIGHT", "MEDIUM", "GALAXY", "INVALID"):
             self.flags[key].toggled.connect(self._show_overlay)
         self.smooth.toggled.connect(self._set_smooth_preview)
         self.flags["OUTLINES"].toggled.connect(self._toggle_outlines)
