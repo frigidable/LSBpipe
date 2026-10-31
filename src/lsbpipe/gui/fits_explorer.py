@@ -108,7 +108,7 @@ class FITSExplorer(QWidget):
         toggles = QHBoxLayout()
         self.flags = {}
         for key, text, enabled in (
-            ("SATUR", "Saturated", True),
+            ("SATUR", "SATUR / ALLMASK", True),
             ("MEDIUM", "Gaia MEDIUM", True),
             ("GALAXY", "SGA GALAXY", False),
             ("OUTLINES", "Aperture outlines", True),
