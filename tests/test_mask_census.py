@@ -144,3 +144,25 @@ def test_square_counts_match_independent_existing_square_coverage_module():
         "instrumental"]["usable"]
     for name in ("SATUR_R", "ALLMASK_R", "MEDIUM", "GALAXY"):
         assert original.maskbit_counts[name] == detailed["maskbits"][name]
+
+
+def test_nonfinite_native_wcs_fails_closed_instead_of_losing_sky_pixels():
+    data, _, field = _fixture()
+    class BrokenWCS:
+        has_celestial = True
+        pixel_n_dim = 2
+        def all_pix2world(self, x, y, origin):
+            return np.full(x.shape, np.nan), np.full(y.shape, np.nan)
+    with pytest.raises(ValueError, match="Nonfinite WCS"):
+        _run(data, BrokenWCS(), field)
+
+
+def test_signed_16bit_maskbits_preserves_high_bit_exactly():
+    data, wcs, field = _fixture()
+    data["maskbits"] = np.zeros((7, 7), dtype="i2")
+    data["maskbits"][3, 3] = np.int16(-32768)  # bit 15 ALLMASK_I
+    report = _run(data, wcs, field, band="r")
+    target = report["scope_counts"]["target_in_square"]
+    assert target["maskbits"]["ALLMASK_I"] == 1
+    assert target["instrumental"]["allmask"] == 0
+    assert target["quality_categories"]["other_bit_not_excluded"] == 1
