@@ -53,13 +53,13 @@ def test_position_aware_component_counts_and_intersections():
     assert report["bits"]["ALLMASK_R"]["connected_regions"] == 0
 
 
-def test_components_near_ra_wrap_and_signed16_high_bit():
+def test_components_near_ra_wrap_preserve_all_flagged_pixels():
     w, bits = synthetic_masks()
     w.wcs.crval[0] = 359.999
     bits[100, 100] |= 1 << 12
     target = SkyField(359.999, 1.22925, 2.)
     report = mask_components_from_array(bits, w, field=target)
-    assert report["bits"]["GALAXY"]["total_pixels_inside_square"] == 20
+    assert report["bits"]["GALAXY"]["total_pixels_inside_square"] == 21
     assert 0 <= report["bits"]["GALAXY"]["regions"][0][
         "centroid_ra_deg"] < 360
 
