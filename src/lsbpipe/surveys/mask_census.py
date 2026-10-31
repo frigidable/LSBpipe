@@ -117,6 +117,8 @@ def mask_census_from_arrays(
         xx, yy = np.meshgrid(np.arange(nx, dtype=float),
                              np.arange(ylo, yhi, dtype=float))
         ra, dec = wcs.all_pix2world(xx, yy, 0)
+        if not (np.all(np.isfinite(ra)) and np.all(np.isfinite(dec))):
+            raise ValueError("Nonfinite WCS sky coordinates in FITS cutout")
         east, north, denom = _project_tan(
             ra, dec, field.ra_deg, field.dec_deg)
         square = (np.isfinite(east) & np.isfinite(north) &
