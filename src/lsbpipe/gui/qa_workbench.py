@@ -84,7 +84,7 @@ class ScienceQAControls(QWidget):
         self._active_step = None
         self._step_for_action = {
             "square": 0, "explore": 0, "figure": 0,
-            "masks": 1, "compare": 2,
+            "census": 1, "masks": 1, "compare": 2,
         }
         self.buttons = {}
 
@@ -117,6 +117,10 @@ class ScienceQAControls(QWidget):
             "footprints. These are diagnostic warnings, not target masks.")
         mask_note.setWordWrap(True)
         masks_layout.addWidget(mask_note)
+        self._add_action(
+            masks_layout, "census", "Quantify masks by sky region",
+            "Exact original pixel counts, bit intersections and numeric "
+            "validity in cutout, square, target and sky annulus")
         self._add_action(
             masks_layout, "masks", "Locate mask footprints",
             "Connected tagged regions, sky centroids and aperture overlaps")
