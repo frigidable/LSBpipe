@@ -257,3 +257,37 @@ Read the largest components in PowerShell:
 
 No FITS modification, masking decision, sky fitting or automatic
 photometric acceptance is made by this operation.
+
+## Strict paired DR9 North/South native-grid diagnostic
+
+After downloading and independently inspecting both original quartets,
+compare the same pixel centers without mosaicking or exposure stacking:
+
+    $northRoot = 'C:\Users\frigi\Documents\PhD\LSBpipeData\pilot_0401p012_north_r'
+    $southRoot = 'C:\Users\frigi\Documents\PhD\LSBpipeData\pilot_0401p012_south_r'
+    python -m lsbpipe.surveys.compare_regions --north-directory "$northRoot\data" --south-directory "$southRoot\data" --brick 0401p012 --band r --ra 40.096208 --dec 1.229250 --width-arcmin 5 --output "$southRoot\north-south-paired.json"
+
+Examine the results in PowerShell:
+
+    $pair = Get-Content "$southRoot\north-south-paired.json" -Raw | ConvertFrom-Json
+    $pair | Select-Object status,pixels,native_wcs_alignment | Format-List
+    $pair.per_region.north | Format-List
+    $pair.per_region.south | Format-List
+    $pair.paired_instrumental_validity | Format-List
+    $pair.paired_mask_flags.SATUR_R | Format-List
+    $pair.paired_mask_flags.ALLMASK_R | Format-List
+    $pair.paired_mask_flags.MEDIUM | Format-List
+    $pair.paired_mask_flags.GALAXY | Format-List
+    $pair.paired_nexp | Format-List
+    $pair.paired_inverse_variance | Format-List
+
+The comparison is fail-closed if the original North and South FITS
+shapes differ or their celestial WCS tie points disagree by >0.001
+pixel. No interpolation or missing-pixel fill is performed.
+The report counts exact overlapping SATUR_R and ALLMASK_R bits
+and separately records invalid image / IVAR / NEXP *outside*
+instrumental saturation and ALLMASK flags. Paired NEXP and IVAR
+compare only values positive in both reductions at matching pixels.
+Interpret the comparison strictly as a reduction-consistency audit:
+the two coadds must not be statistically combined as independent
+observations merely because both are labeled DR9.
