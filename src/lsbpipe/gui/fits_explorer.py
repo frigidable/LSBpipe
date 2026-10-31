@@ -8,6 +8,10 @@ cutout WCS, not guessed pixel scales or a remote sky image.
 from __future__ import annotations
 
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+from PySide6.QtCore import QTimer
+
+from .raster_cache import BoundedRasterCache
 
 from PySide6.QtCore import Qt, Signal, QPointF
 from PySide6.QtGui import (
@@ -75,6 +79,18 @@ class FITSExplorer(QWidget):
         self._dataset = None
         self._overlays = []
         self._color_data = None
+        self._raster_cache = BoundedRasterCache(max_bytes=48 * 1024 * 1024)
+        self._render_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="lsbpipe-fits-display")
+        self._render_future = None
+        self._render_active = None
+        self._render_requested = None
+        self._render_generation = 0
+        self._displayed_base_key = None
+        self._displayed_overlay_key = None
+        self._render_timer = QTimer(self)
+        self._render_timer.setInterval(30)
+        self._render_timer.timeout.connect(self._poll_render)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(5)
@@ -143,6 +159,10 @@ class FITSExplorer(QWidget):
         self.context.setObjectName("fits_provenance")
         self.context.setWordWrap(True)
         layout.addWidget(self.context)
+        self.render_status = QLabel("Pixel-accurate FITS display · no data loaded.")
+        self.render_status.setObjectName("fits_render_status")
+        self.render_status.setWordWrap(True)
+        layout.addWidget(self.render_status)
 
         self.scene = QGraphicsScene(self)
         self.view = FITSGraphicsView()
@@ -183,6 +203,13 @@ class FITSExplorer(QWidget):
         self.view.pointHovered.connect(self.inspect_pixel)
 
     def clear_data(self):
+        self._render_generation += 1
+        self._render_requested = None
+        self._raster_cache.clear()
+        self._displayed_base_key = None
+        self._displayed_overlay_key = None
+        # A running NumPy render is allowed to finish; its generation
+        # token makes it impossible to display on a changed FITS dataset.
         self._dataset = None
         self.base_item.setPixmap(QPixmap())
         self.overlay_item.setPixmap(QPixmap())
@@ -193,6 +220,7 @@ class FITSExplorer(QWidget):
             "The selected field or band changed. Reload the original FITS.")
         self.context.setText("No local science data loaded.")
         self.scene.setSceneRect(0, 0, 0, 0)
+        self.render_status.setText("No original FITS render loaded.")
 
     def set_dataset(self, dataset: dict):
         if dataset["status"] != "DIAGNOSTIC_NOT_ADOPTED":
@@ -202,6 +230,13 @@ class FITSExplorer(QWidget):
                 any(np.shape(a) != tuple(shape)
                     for a in dataset["data"].values())):
             raise ValueError("All original FITS layers must share a 2D pixel grid")
+        # Until a tiled explorer is adopted, refuse a footprint that would
+        # require a dangerously large full-resolution Qt raster. Never
+        # silently downsample a pixel-accuracy scientific inspection.
+        if int(shape[0]) * int(shape[1]) > 6_000_000:
+            raise ValueError(
+                "FITS cutout exceeds the 6 million-pixel full-resolution "
+                "viewer limit; select a narrower field. Tiled mode is pending.")
         self.clear_data()
         self._dataset = dataset
         ny, nx = shape
@@ -212,7 +247,6 @@ class FITSExplorer(QWidget):
             f"{nx} × {ny} px  ·  {dataset['field'].width_arcmin:g}′ square")
         self._add_outlines()
         self._show_layer()
-        self._show_overlay()
         self.view.fit_image()
 
     @staticmethod
@@ -230,19 +264,39 @@ class FITSExplorer(QWidget):
             qt_array.data, width, height, width*expected, fmt).copy()
         return QPixmap.fromImage(image)
 
-    def _show_layer(self, *_):
-        if self._dataset is None:
-            return
+    def _render_keys(self):
         kind = self.layer.currentData()
         contrast = self.contrast.currentData()
-        if contrast == "standard":
-            rgb = self._dataset["previews"][kind]
-        else:
-            rgb = rgb_for_layer(
-                self._dataset["data"][kind], kind,
-                self._dataset["band"], contrast=contrast)
-        self.base_item.setPixmap(self._pixmap(rgb))
-        self._show_overlay()
+        flags = tuple(
+            self.flags[key].isChecked()
+            for key in ("SATUR", "MEDIUM", "GALAXY", "INVALID"))
+        return ("base", kind, contrast), ("overlay", *flags)
+
+    @staticmethod
+    def _compute_display(dataset, kind, contrast, flags, base, overlay):
+        """Worker-safe NumPy-only rendering; no QObject or QPixmap access."""
+        if base is None:
+            # Old explicitly synthetic fixtures can provide precomputed
+            # standard images; real FITS loading no longer allocates four.
+            previews = dataset.get("previews", {})
+            if contrast == "standard" and kind in previews:
+                base = previews[kind]
+            else:
+                base = rgb_for_layer(
+                    dataset["data"][kind], kind, dataset["band"],
+                    contrast=contrast)
+        if overlay is None:
+            data = dataset["data"]
+            overlay = overlay_rgba(
+                data["maskbits"], dataset["band"],
+                show_satur=flags[0], show_medium=flags[1],
+                show_galaxy=flags[2], show_invalid=flags[3],
+                image=data["image"], invvar=data["invvar"],
+                nexp=data["nexp"])
+        return base, overlay
+
+    def _show_layer(self, *_):
+        self._request_render()
 
     def _set_smooth_preview(self, enabled: bool):
         mode = Qt.SmoothTransformation if enabled else Qt.FastTransformation
@@ -250,18 +304,101 @@ class FITSExplorer(QWidget):
         self.overlay_item.setTransformationMode(mode)
 
     def _show_overlay(self, *_):
+        self._request_render()
+
+    def _request_render(self):
+        """Coalesce rapid edits: only the last generation is published."""
         if self._dataset is None:
             return
-        alpha = overlay_rgba(
-            self._dataset["data"]["maskbits"], self._dataset["band"],
-            show_satur=self.flags["SATUR"].isChecked(),
-            show_medium=self.flags["MEDIUM"].isChecked(),
-            show_galaxy=self.flags["GALAXY"].isChecked(),
-            show_invalid=self.flags["INVALID"].isChecked(),
-            image=self._dataset["data"]["image"],
-            invvar=self._dataset["data"]["invvar"],
-            nexp=self._dataset["data"]["nexp"])
-        self.overlay_item.setPixmap(self._pixmap(alpha, alpha=True))
+        self._render_generation += 1
+        generation = self._render_generation
+        base_key, overlay_key = self._render_keys()
+        self._render_requested = (generation, self._dataset,
+                                  base_key, overlay_key)
+        if self._render_future is None:
+            self._start_render()
+
+    def _start_render(self):
+        request = self._render_requested
+        if request is None or self._dataset is None:
+            self._render_timer.stop()
+            return
+        self._render_requested = None
+        generation, dataset, base_key, overlay_key = request
+        kind, contrast = base_key[1:]
+        flags = overlay_key[1:]
+        base = self._raster_cache.get(base_key)
+        overlay = self._raster_cache.get(overlay_key)
+        self._render_active = (generation, dataset, base_key, overlay_key)
+        # Small fixtures remain immediately inspectable in Qt tests.
+        # Large original data are converted to display RGB off the UI thread.
+        if dataset["pixel_shape"][0] * dataset["pixel_shape"][1] <= 120_000:
+            try:
+                rgb, rgba = self._compute_display(
+                    dataset, kind, contrast, flags, base, overlay)
+            except Exception as exc:
+                self.render_status.setText(
+                    f"Display rendering failed: {type(exc).__name__}: {exc}")
+            else:
+                self._finish_render(
+                    generation, dataset, base_key, overlay_key, rgb, rgba)
+            self._render_active = None
+            if self._render_requested is not None:
+                self._start_render()
+            return
+        self.render_status.setText(
+            "Preparing display in background · original pixels unchanged…")
+        self._render_future = self._render_executor.submit(
+            self._compute_display, dataset, kind, contrast,
+            flags, base, overlay)
+        self._render_timer.start()
+
+    def _poll_render(self):
+        future = self._render_future
+        if future is None or not future.done():
+            return
+        self._render_future = None
+        generation, dataset, base_key, overlay_key = self._render_active
+        self._render_active = None
+        try:
+            rgb, rgba = future.result()
+        except Exception as exc:
+            if generation == self._render_generation:
+                self.render_status.setText(
+                    f"Display rendering failed: {type(exc).__name__}: {exc}")
+        else:
+            self._finish_render(
+                generation, dataset, base_key, overlay_key, rgb, rgba)
+        if self._render_requested is not None:
+            self._start_render()
+        else:
+            self._render_timer.stop()
+
+    def _finish_render(self, generation, dataset, base_key, overlay_key,
+                       rgb, rgba):
+        if generation != self._render_generation or dataset is not self._dataset:
+            return
+        self._raster_cache.put(base_key, rgb)
+        self._raster_cache.put(overlay_key, rgba)
+        if self._displayed_base_key != base_key:
+            self.base_item.setPixmap(self._pixmap(rgb))
+            self._displayed_base_key = base_key
+        if self._displayed_overlay_key != overlay_key:
+            self.overlay_item.setPixmap(self._pixmap(rgba, alpha=True))
+            self._displayed_overlay_key = overlay_key
+        self.render_status.setText(
+            "Full-resolution original pixels · "
+            f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} · "
+            f"RGB cache {self._raster_cache.bytes_used / (1024*1024):.1f} / "
+            f"{self._raster_cache.max_bytes / (1024*1024):.0f} MiB · "
+            "display only")
+
+    def closeEvent(self, event):
+        self._render_timer.stop()
+        self._render_generation += 1
+        self._render_requested = None
+        self._render_executor.shutdown(wait=False, cancel_futures=True)
+        super().closeEvent(event)
 
     def _add_outlines(self):
         self._overlays.clear()
