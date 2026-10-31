@@ -133,3 +133,57 @@ def test_invalid_checkerboard_is_distinct_from_valid_zero_flux():
         invalid_pixel_rgba(nexp, "not_a_layer")
     with pytest.raises(ValueError):
         invalid_pixel_rgba(nexp.ravel(), "nexp")
+
+
+
+def test_invalid_data_hatch_is_distinct_from_true_faint_zero_flux():
+    image = np.array([
+        [0., np.nan, 1., np.inf],
+        [2., 3., 0., 0.]], dtype="f4")
+    ivar = np.array([
+        [4., 4., 0., 4.],
+        [4., -2., 4., 4.]], dtype="f4")
+    nexp = np.array([
+        [4., 4., 4., 4.],
+        [4., 4., 0., 4.]], dtype="i2")
+    bits = np.zeros(image.shape, dtype="i4")
+    saved = tuple(layer.copy() for layer in (image, ivar, nexp, bits))
+    rgba = overlay_rgba(
+        bits, "r", show_satur=False, show_medium=False,
+        show_galaxy=False, show_invalid=True,
+        image=image, invvar=ivar, nexp=nexp)
+    # A valid zero image flux is not a masked/instrumentally bad pixel.
+    assert rgba[0, 0, 3] == 0
+    assert rgba[1, 3, 3] == 0
+    for y, x in ((0, 1), (0, 2), (0, 3), (1, 1), (1, 2)):
+        assert tuple(rgba[y, x, :3]) == (210, 57, 217)
+        assert rgba[y, x, 3] in (75, 170)
+    assert rgba[0, 1, 3] != rgba[0, 2, 3]
+    np.testing.assert_array_equal(image, saved[0])
+    np.testing.assert_array_equal(ivar, saved[1])
+    np.testing.assert_array_equal(nexp, saved[2])
+    np.testing.assert_array_equal(bits, saved[3])
+
+
+def test_invalidity_overlay_respects_shape_and_does_not_mask_sga_target():
+    flags = np.array([[1 << 12, 1 << 3]], dtype="i4")
+    im = np.array([[0., np.nan]], dtype="f4")
+    ivar = np.ones_like(im)
+    nexp = np.ones_like(im)
+    rendered = overlay_rgba(
+        flags, "r", show_satur=True, show_medium=False,
+        show_galaxy=True, show_invalid=True,
+        image=im, invvar=ivar, nexp=nexp)
+    # Catalog GALAXY remains blue, not intrinsically invalid.
+    assert tuple(rendered[0, 0]) == (77, 159, 230, 115)
+    # Explicit instrumental exclusion outranks a missing pixel in display.
+    assert tuple(rendered[0, 1]) == (232, 71, 67, 175)
+    with pytest.raises(ValueError, match="requires"):
+        overlay_rgba(
+            flags, "r", show_satur=False, show_medium=False,
+            show_galaxy=False, show_invalid=True)
+    with pytest.raises(ValueError, match="match"):
+        overlay_rgba(
+            flags, "r", show_satur=False, show_medium=False,
+            show_galaxy=False, show_invalid=True,
+            image=np.zeros((3, 3)), invvar=ivar, nexp=nexp)
