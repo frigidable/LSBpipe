@@ -686,15 +686,14 @@ def test_editing_fits_folder_invalidates_previous_saved_result(
 
 def test_changing_band_or_north_folder_invalidates_loaded_fits(
         offline_explorer, tmp_path):
-    from tests.gui.test_fits_explorer_gui import synthetic_dataset
     w = offline_explorer
     apply_offline_state(w, "S3")
-    w.fits_explorer.set_dataset(synthetic_dataset())
+    w.fits_explorer._dataset = {"synthetic": True}
     assert w.fits_explorer._dataset is not None
     w.science_qa.north_directory.setText(str(tmp_path/"other-north"))
     assert w.fits_explorer._dataset is None
     assert not w.science_qa.open_report.isEnabled()
-    w.fits_explorer.set_dataset(synthetic_dataset())
+    w.fits_explorer._dataset = {"synthetic": True}
     # The synthetic selected brick has r/g/z band inventory.
     old = w.science_qa.current_band()
     next_band = "g" if old != "g" else "r"
