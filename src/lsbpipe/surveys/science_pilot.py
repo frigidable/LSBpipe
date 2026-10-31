@@ -229,13 +229,23 @@ def run_science_pilot(
                 f"Pilot downloaded incompletely; see {report_path}")
     if inspect:
         from .coverage import inspect_local_brick, save_coverage
-        qa = inspect_local_brick(
-            root / "data", release=release, region=region, brick=brick,
-            band=band, ra_deg=field.ra_deg, dec_deg=field.dec_deg,
-            target_radius_arcsec=target_radius_arcsec,
-            sky_inner_arcsec=sky_inner_arcsec,
-            sky_outer_arcsec=sky_outer_arcsec)
-        coverage_path = save_coverage(qa, root / "pilot-coverage.json")
+        try:
+            qa = inspect_local_brick(
+                root / "data", release=release, region=region, brick=brick,
+                band=band, ra_deg=field.ra_deg, dec_deg=field.dec_deg,
+                target_radius_arcsec=target_radius_arcsec,
+                sky_inner_arcsec=sky_inner_arcsec,
+                sky_outer_arcsec=sky_outer_arcsec)
+            coverage_path = save_coverage(qa, root / "pilot-coverage.json")
+        except Exception as exc:
+            # Persist a failed attempt; never leave the previous success
+            # report masquerading as the latest attempted inspection.
+            report["state"] = "FITS_QA_FAILED"
+            report["inspection_error"] = f"{type(exc).__name__}: {exc}"
+            (root / "pilot-report.json").write_text(
+                json.dumps(report, indent=2, ensure_ascii=False),
+                encoding="utf-8")
+            raise
         report["coverage"] = str(coverage_path.resolve())
         report["state"] = "FITS_QA_DIAGNOSTIC_NOT_ADOPTED"
     report_path = root / "pilot-report.json"
