@@ -518,3 +518,117 @@ def test_brick_geometry_does_not_follow_edited_target_as_stale_coverage(offline_
     # unrelated archive brick polygons must not claim to cover it.
     assert len(parse_qs(urlparse(
         w._viewer_link(include_bricks=True)).query)["poly"][0].split(";")) == 1
+
+
+
+def test_science_workbench_is_a_separate_tab_preserving_archive_and_viewer(
+        offline_explorer, qtbot):
+    w = offline_explorer
+    assert w.inspector_tabs.count() == 2
+    assert w.inspector_tabs.tabText(0) == "Archive files"
+    assert w.inspector_tabs.tabText(1) == "Science QA"
+    assert w.preview_tabs.count() == 2
+    assert w.preview_tabs.currentWidget() is w.sky
+    assert w.files.columnCount() == 4
+    assert w.save_btn.isEnabled()
+    assert w.download_btn.isEnabled()
+    assert not w.science_qa.buttons["square"].isEnabled()
+    assert not w.science_qa.buttons["compare"].isEnabled()
+    apply_offline_state(w, "S3")
+    w.inspector_tabs.setCurrentWidget(w.science_qa)
+    qtbot.wait(20)
+    assert w.science_qa.selection_label.text().startswith("DR9 · north")
+    assert w.science_qa.current_band() == "r"
+    assert all(b.isEnabled() for b in w.science_qa.buttons.values())
+    assert w.sky.isVisible()  # local QA analysis does not hide the sky viewer
+
+
+def test_science_qa_uses_selected_brick_and_pasted_target_without_requery(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    folder = tmp_path/"user-pilot"
+    w.science_qa.set_data_root(folder, region="north")
+    assert w.science_qa.directory.text() == str(folder)
+    assert w.science_qa.north_directory.text() == str(folder)
+    evidence = {}
+    def inline(action, finished):
+        evidence["threaded"] = False
+        finished(action(None))
+    with patch.object(w, "_start", side_effect=inline), patch(
+            "lsbpipe.gui.survey_explorer.run_science_qa_backend") as core:
+        core.return_value = {
+            "action":"square", "status":"DIAGNOSTIC_NOT_ADOPTED",
+            "summary":"Original square: 98% instrumentally usable",
+            "path":str(tmp_path/"qa-reports"/"square.json"),
+            "is_figure":False}
+        w.start_science_qa("square")
+        core.assert_called_once()
+    kws = core.call_args.kwargs
+    assert kws["directory"] == str(folder)
+    assert kws["hit"] == w.hits[0]
+    assert kws["field"] == w._field()
+    assert kws["band"] == "r"
+    assert "98%" in w.science_qa.result.toPlainText()
+    assert w.science_qa.open_report.isEnabled()
+    assert w.preview_tabs.currentWidget() is w.sky
+
+
+def test_science_qa_never_analyzes_stale_archive_selection(
+        offline_explorer):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.science_qa.directory.setText("Z:/old-data")
+    w.ra.setText("40.096208")
+    with patch("lsbpipe.gui.survey_explorer.run_science_qa_backend") as core, \
+         patch("lsbpipe.gui.survey_explorer.QMessageBox.warning") as warning:
+        w.start_science_qa("square")
+    warning.assert_called_once()
+    core.assert_not_called()
+
+
+def test_local_original_fits_map_opens_in_central_preview_tab(
+        offline_explorer, tmp_path, qtbot):
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtCore import Qt
+    w = offline_explorer
+    image = tmp_path/"QA_figure.png"
+    pix = QPixmap(200,100)
+    pix.fill(Qt.white)
+    assert pix.save(str(image), "PNG")
+    w._science_qa_ready({
+        "action":"figure", "status":"DIAGNOSTIC_NOT_ADOPTED",
+        "summary":"IMAGE / INVVAR / NEXP / MASKBITS",
+        "path":str(image), "is_figure":True})
+    qtbot.wait(20)
+    assert w.preview_tabs.currentWidget() is w.qa_image_scroll
+    assert w._qa_pixmap is not None
+    assert w.qa_image.pixmap() is not None
+    assert "LOCAL FITS QA" in w.preview_label.text()
+    w.preview_tabs.setCurrentWidget(w.sky)
+    assert "REMOTE PREVIEW" in w.preview_label.text()
+
+
+def test_science_qa_disables_unsafe_paired_comparison_without_two_roots(
+        offline_explorer):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.information") as info, \
+         patch("lsbpipe.gui.survey_explorer.run_science_qa_backend") as core:
+        w.start_science_qa("compare")
+    info.assert_called_once()
+    core.assert_not_called()
+
+
+def test_qa_fields_remain_scrollable_at_laptop_size(offline_explorer, qtbot):
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.resize(1366, 768)
+    w.inspector_tabs.setCurrentWidget(w.science_qa)
+    qtbot.wait(30)
+    assert w.science_qa.width() > 250
+    assert w.science_qa.buttons["square"].isEnabled()
+    assert w.sky.width() >= w.width() * 0.55
