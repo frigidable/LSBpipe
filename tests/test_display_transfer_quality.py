@@ -79,7 +79,7 @@ def test_quality_categories_match_current_conservative_instrumental_policy():
     report = quality_summary(data, "r")
     assert report["status"] == "DIAGNOSTIC_NOT_ADOPTED"
     assert report["categories"] == {
-        "clean":1,"catalog_warning_not_excluded":3,
+        "clean":1,"other_bit_not_excluded":3,
         "satur":1,"allmask":2,"bad_numeric":1}
     assert quality_rgb(data,"r").shape == (1,8,3)
     # g-band saturation does NOT exclude r-band pixels.
@@ -161,3 +161,23 @@ def test_numeric_invalidity_and_allmask_overrule_saturation_overlays():
     assert tuple(overlay[0, 2, :3]) == (210, 57, 217) # invalid
     np.testing.assert_array_equal(bits[0], [
         1 << 3, (1 << 3) | (1 << 6), (1 << 3) | (1 << 6)])
+
+
+def test_nonhard_and_future_maskbits_are_warnings_not_false_clean_pixels():
+    # Official flags include NPRIMARY and BAILOUT; future bits must also
+    # remain visible rather than being silently declared clean.
+    sources = np.array([0, 1 << 0, 1 << 10, 1 << 13,
+                        1 << 2, 1 << 19, 1 << 21], dtype="u4")[None, :]
+    data = {"image": np.zeros(sources.shape, dtype="f4"),
+            "invvar": np.ones(sources.shape, dtype="f4"),
+            "nexp": np.ones(sources.shape, dtype="i2"),
+            "maskbits": sources}
+    classes = quality_classes(data, "r")
+    np.testing.assert_array_equal(classes[0], [0, 1, 1, 1, 1, 1, 1])
+    report = quality_summary(data, "r")
+    assert report["categories"]["clean"] == 1
+    assert report["categories"]["other_bit_not_excluded"] == 6
+    assert sum(report["categories"].values()) == sources.size
+    # GALAXY (SGA) is a warning, not a blanket exclusion of the target.
+    data["maskbits"][0, 0] = 1 << 12
+    assert quality_classes(data, "r")[0, 0] == 1
