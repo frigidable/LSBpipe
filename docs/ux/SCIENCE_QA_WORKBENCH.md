@@ -135,3 +135,54 @@ run, failed runs leaving no completed record, modifications to input
 FITS with unchanged size/mtime, stale in-flight results and selection
 changes. This does not yet constitute a real Windows end-to-end
 acceptance of the new GUI, which will be performed later.
+
+## P0.4 — on-demand rendering and bounded display memory
+
+Before this change, every opened original-FITS quartet produced four
+eager full-resolution RGB copies in the data-loading worker, and
+changing contrast or overlays could allocate large render buffers
+on the Qt UI thread. The interactive FITS Explorer now:
+
+- retains the four original numerical arrays for exact ICRS-pixel
+  readout; they are marked read-only and never modified;
+- avoids precomputing RGB for the four layers; one selected layer
+  and overlay are rendered on demand;
+- uses a single Python background render worker for cutouts larger
+  than 120,000 pixels (Qt Pixmap creation stays on the UI thread);
+- coalesces rapid layer/contrast/flag changes, using a generation
+  token to reject late images from obsolete datasets or controls;
+- uses a 48 MiB byte-budgeted LRU for display-only RGB/RGBA buffers;
+- displays the current display-cache usage and scientific viewing
+  state while each layer is prepared;
+- refuses a full-frame interactive image larger than 6,000,000
+  original pixels with an explicit explanatory error. This is a
+  temporary safety limit, **not** a tiled viewer or automatic resample.
+
+Pixel readout remains strictly tied to original FITS values and WCS.
+Small synthetic images are rendered synchronously to retain precise
+test assertions. Tests also exercise larger asynchronous arrays,
+rapid changes, cache eviction, removal of pending science views,
+and failure to silently downsample oversized images.
+
+**Limitations:** the raw four-FITS arrays and temporary rendering
+buffers are not counted within the 48 MiB *display cache* cap.
+Peak process memory has not yet been benchmarked on the user's
+real Windows FITS; a future tile/pyramid renderer will be needed
+for images larger than the current full-resolution cap.
+
+## P1.1 — progressively organized Science QA controls
+
+The science inspector now keeps the selected brick/band and original
+FITS data root visible at the top, followed by a three-stage workflow:
+
+1. Inspect FITS: square coverage, interactive image, four-panel export.
+2. Review masks: connected SGA, Gaia and saturation footprints.
+3. Compare reductions: separate original North and South data roots
+   and strict pixelwise paired comparison.
+
+Each step has an explicit Running / Diagnostic saved / Failed /
+Viewer ready status; statuses reset when source context changes.
+Scientific result summaries, run ID, JSON/PNG and provenance manifest
+remain accessible below the workflow. This is a navigation structure
+only: no sky subtraction, photometric source masking or scientifically
+adopted surface brightness is introduced.
