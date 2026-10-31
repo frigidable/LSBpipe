@@ -174,9 +174,9 @@ def overlay_rgba(maskbits: np.ndarray, band: str, *,
         overlay[invalid, :3] = (210, 57, 217)
         # Pixel-level crosshatch distinguishes missing data from faint flux.
         # This is strictly a display overlay, never a science rejection map.
-        yy, xx = np.indices(bits.shape)
-        opacity = np.where((xx + yy) % 4 < 2, 170, 75).astype(np.uint8)
-        overlay[invalid, 3] = opacity[invalid]
+        yy, xx = np.nonzero(invalid)
+        overlay[yy, xx, 3] = np.where(
+            (xx + yy) % 4 < 2, 170, 75).astype(np.uint8)
     if show_satur:
         selected = np.uint32(
             (1 << LEGACY_BITS["SATUR_" + band.upper()]) |
