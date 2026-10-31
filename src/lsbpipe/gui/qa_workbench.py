@@ -75,8 +75,10 @@ class ScienceQAControls(QWidget):
              "Original-FITS WCS coverage, NEXP and per-bit fractions"),
             ("masks", "Locate mask footprints",
              "Find connected GALAXY/MEDIUM/SATUR regions in sky coordinates"),
-            ("figure", "Open four-layer FITS map",
-             "Show original IMAGE, INVVAR, NEXP, MASKBITS in center workspace"),
+            ("explore", "Explore original FITS interactively",
+             "Pixel readout in ICRS, zoom, layers and on/off mask overlays"),
+            ("figure", "Export four-layer FITS map",
+             "Save a static four-panel WCS figure, read-only"),
             ("compare", "Compare DR9 North / South",
              "Compare only identical native WCS pixel centers; no stacking"),
         ):
