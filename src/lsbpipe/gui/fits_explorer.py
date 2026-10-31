@@ -130,13 +130,11 @@ class FITSExplorer(QWidget):
         self.fit_button = QPushButton("Fit")
         self.fit_button.setToolTip("Fit the entire local FITS cutout into view")
         self.fit_button.clicked.connect(self._fit)
-        bar.addWidget(self.fit_button)
         self.smooth = QCheckBox("Smooth preview")
         self.smooth.setObjectName("fits_smooth_preview")
         self.smooth.setToolTip(
             "Off: exact nearest-neighbor pixels; on: interpolated display "
             "only, not suitable for checking isolated mask pixels")
-        bar.addWidget(self.smooth)
         layout.addLayout(bar)
 
         scale_row = QHBoxLayout()
@@ -160,6 +158,8 @@ class FITSExplorer(QWidget):
         self.auto_limits.setObjectName("fits_reset_display_range")
         self.auto_limits.clicked.connect(self._auto_display_range)
         scale_row.addWidget(self.auto_limits)
+        scale_row.addWidget(self.fit_button)
+        scale_row.addWidget(self.smooth)
         layout.addLayout(scale_row)
         self.range_info = QLabel("Display limits: automatic · native units")
         self.range_info.setObjectName("fits_display_range_info")
