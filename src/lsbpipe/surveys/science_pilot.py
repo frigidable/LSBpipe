@@ -102,7 +102,8 @@ def run_science_pilot(
         "selected_products": sorted(selected),
         "manifest": str(manifest_path.resolve()),
         "http_evidence": statuses,
-        "state": "PLANNED_NOT_DOWNLOADED",
+        "state": ("URLS_PROBED_NOT_DOWNLOADED"
+                  if check_urls and not download else "PLANNED_NOT_DOWNLOADED"),
         "data_root": str((root / "data").resolve()),
         "limits": [
             "Original coadd files only; 4 files from one release+region+brick",
@@ -113,9 +114,14 @@ def run_science_pilot(
     }
     if download:
         if statuses.get("HTTP_MISSING", 0):
+            report["state"] = "URL_MISSING_DOWNLOAD_ABORTED"
+            report_path = root / "pilot-report.json"
+            report_path.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False),
+                encoding="utf-8")
             raise RuntimeError(
                 "At least one required FITS URL returned HTTP 404/410. "
-                "Pilot download aborted; examine pilot-manifest.json")
+                "Pilot download aborted; examine pilot-report.json")
         receipt = download_manifest(
             manifest, root / "data", product_paths=selected,
             continue_on_error=True)
