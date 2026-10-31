@@ -135,6 +135,8 @@ def test_http_missing_aborts_download_before_get(tmp_path, monkeypatch):
             brick="0401p012", band="r", directory=tmp_path, download=True)
     assert (tmp_path/"pilot-manifest.json").is_file()
     assert not (tmp_path/"data").exists()
+    report = json.loads((tmp_path/"pilot-report.json").read_text("utf-8"))
+    assert report["state"] == "URL_MISSING_DOWNLOAD_ABORTED"
 
 
 def test_incomplete_download_records_noncomplete_pilot_report(
@@ -152,3 +154,18 @@ def test_incomplete_download_records_noncomplete_pilot_report(
             brick="0401p012", band="r", directory=tmp_path, download=True)
     report = json.loads((tmp_path/"pilot-report.json").read_text("utf-8"))
     assert report["state"] == "INCOMPLETE_DOWNLOAD"
+
+
+def test_head_only_probe_distinguished_from_actual_download(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.probe_product",
+        lambda entry: {"evidence": "HTTP_OK", "size_bytes": 1024})
+    monkeypatch.setattr(
+        "lsbpipe.surveys.science_pilot.download_manifest",
+        lambda *a, **k: pytest.fail("HEAD-only run triggered science GET"))
+    out = run_science_pilot(
+        FIELD, hits(), release="dr9", region="south", brick="0401p012",
+        band="r", directory=tmp_path, check_urls=True)
+    assert out["state"] == "URLS_PROBED_NOT_DOWNLOADED"
+    assert out["http_evidence"] == {"HTTP_OK": 4}
+    assert not (tmp_path/"data").exists()
