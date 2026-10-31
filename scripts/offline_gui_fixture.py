@@ -97,13 +97,13 @@ def apply_offline_state(window, state: str):
         window.kind_filter.setCurrentText("image")
         assert len(window._selected()) == 88  # filters never discard hidden selection
         return
-    if state in ("S3", "S4", "S5"):
+    if state in ("S3", "S4", "S5", "S6"):
         window.bricks.selectRow(0)
         with patch.object(gui.QInputDialog, "getItem", return_value=("r", True)):
             window.select_science_quartet()
         assert len(window._selected()) == 4
         window.brick_filter.setCurrentText(hits[0].name)
-        if state in ("S4", "S5"):
+        if state in ("S4", "S5", "S6"):
             # Visual-only synthetic state: never claim original FITS loaded.
             window.science_qa.directory.setText(
                 "C:/synthetic-placeholder/NOT_REAL_FITS")
@@ -116,6 +116,16 @@ def apply_offline_state(window, state: str):
             if state == "S5":
                 window.fits_explorer.set_dataset(make_synthetic_fits_view())
                 window.preview_tabs.setCurrentWidget(window.fits_explorer)
+            elif state == "S6":
+                window.science_qa.steps.setCurrentIndex(2)
+                window.science_qa.north_directory.setText(
+                    "C:/synthetic/NORTH-NOT-REAL")
+                window.science_qa.south_directory.setText(
+                    "C:/synthetic/SOUTH-NOT-REAL")
+                window.science_qa.result.setPlainText(
+                    "SYNTHETIC COMPARE PANEL — NO ORIGINAL FITS READ\n"
+                    "Original north and south roots are required.\n"
+                    "Strict native WCS check; no stacking.")
         return
     raise ValueError(f"Unknown offline state: {state}")
 
