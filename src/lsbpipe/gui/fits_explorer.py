@@ -307,36 +307,101 @@ class FITSExplorer(QWidget):
             qt_array.data, width, height, width*expected, fmt).copy()
         return QPixmap.fromImage(image)
 
+    def _layer_changed(self, *_):
+        kind = self.layer.currentData()
+        numeric = kind in ("image", "invvar", "nexp")
+        self.contrast.setEnabled(kind == "image")
+        self.scaling.setEnabled(numeric)
+        self.vmin.setEnabled(numeric)
+        self.vmax.setEnabled(numeric)
+        self.apply_limits.setEnabled(numeric)
+        self.auto_limits.setEnabled(numeric)
+        # Reject incompatible transfer choices in the widget itself,
+        # instead of allowing a background thread to crash repeatedly.
+        if numeric:
+            try:
+                transfer_settings(kind, scaling=self.scaling.currentData())
+            except ValueError:
+                self.scaling.setCurrentIndex(0)
+        saved = self._manual_ranges.get(kind)
+        self.vmin.setText(format(saved[0], ".8g") if saved else "")
+        self.vmax.setText(format(saved[1], ".8g") if saved else "")
+        self._show_layer()
+
+    def _apply_display_range(self):
+        kind = self.layer.currentData()
+        if kind not in ("image", "invvar", "nexp"):
+            return
+        try:
+            lo = float(self.vmin.text().strip())
+            hi = float(self.vmax.text().strip())
+            _, accepted = transfer_settings(
+                kind, scaling=self.scaling.currentData(), limits=(lo, hi))
+        except (ValueError, TypeError) as exc:
+            self.range_info.setText(f"Display range rejected: {exc}")
+            return
+        self._manual_ranges[kind] = accepted
+        self._show_layer()
+
+    def _auto_display_range(self):
+        kind = self.layer.currentData()
+        self._manual_ranges.pop(kind, None)
+        self.vmin.clear()
+        self.vmax.clear()
+        self._show_layer()
+
     def _render_keys(self):
         kind = self.layer.currentData()
         contrast = self.contrast.currentData()
+        scaling = self.scaling.currentData()
+        limits = self._manual_ranges.get(kind)
         flags = tuple(
             self.flags[key].isChecked()
-            for key in ("SATUR", "MEDIUM", "GALAXY", "INVALID"))
-        return ("base", kind, contrast), ("overlay", *flags)
+            for key in ("SATUR", "ALLMASK", "BRIGHT",
+                        "MEDIUM", "GALAXY", "INVALID"))
+        # For the categorical quality view, overlay controls are not applied:
+        # this prevents hiding the QA categories behind another QA overlay.
+        overlay_key = ("overlay", "transparent") if kind == "quality" else (
+            "overlay", *flags)
+        return ("base", kind, contrast, scaling, limits), overlay_key
 
     @staticmethod
-    def _compute_display(dataset, kind, contrast, flags, base, overlay):
-        """Worker-safe NumPy-only rendering; no QObject or QPixmap access."""
+    def _compute_display(dataset, kind, contrast, flags, base, overlay,
+                         scaling="auto", limits=None):
+        """Worker-safe; computes only NumPy arrays and metadata, no Qt."""
+        valid_layer = kind in ("image", "invvar", "nexp")
+        if valid_layer:
+            lo, hi, mode = display_range(
+                dataset["data"][kind], kind, contrast=contrast,
+                scaling=scaling, limits=limits)
+            info = (lo, hi, mode)
+        else:
+            info = None
         if base is None:
-            # Old explicitly synthetic fixtures can provide precomputed
-            # standard images; real FITS loading no longer allocates four.
             previews = dataset.get("previews", {})
-            if contrast == "standard" and kind in previews:
+            if (kind != "quality" and contrast == "standard" and
+                    scaling == "auto" and limits is None and kind in previews):
                 base = previews[kind]
             else:
                 base = rgb_for_layer(
-                    dataset["data"][kind], kind, dataset["band"],
-                    contrast=contrast)
+                    dataset["data"]["maskbits"] if kind == "quality"
+                    else dataset["data"][kind],
+                    kind, dataset["band"], contrast=contrast,
+                    scaling=scaling, limits=limits,
+                    numeric_layers=dataset["data"] if kind == "quality" else None)
         if overlay is None:
-            data = dataset["data"]
-            overlay = overlay_rgba(
-                data["maskbits"], dataset["band"],
-                show_satur=flags[0], show_medium=flags[1],
-                show_galaxy=flags[2], show_invalid=flags[3],
-                image=data["image"], invvar=data["invvar"],
-                nexp=data["nexp"])
-        return base, overlay
+            if kind == "quality":
+                overlay = np.zeros((*dataset["pixel_shape"], 4), dtype=np.uint8)
+            else:
+                data = dataset["data"]
+                overlay = overlay_rgba(
+                    data["maskbits"], dataset["band"],
+                    show_satur=flags[0], show_allmask=flags[1],
+                    show_bright=flags[2], show_medium=flags[3],
+                    show_galaxy=flags[4], show_invalid=flags[5],
+                    image=data["image"], invvar=data["invvar"],
+                    nexp=data["nexp"])
+        return base, overlay, info
 
     def _show_layer(self, *_):
         self._request_render()
