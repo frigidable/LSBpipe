@@ -18,6 +18,7 @@ class ScienceQAControls(QWidget):
     """UI state only; all expensive science work is handled by main worker."""
 
     requested = Signal(str)
+    contextChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -58,7 +59,7 @@ class ScienceQAControls(QWidget):
         self.band.setObjectName("science_qa_band")
         self.band.setAccessibleName("Band for local FITS diagnostics")
         layout.addWidget(self.band)
-        self.band.currentTextChanged.connect(self.clear_result)
+        self.band.currentTextChanged.connect(self._context_edited)
 
         layout.addWidget(QLabel("Downloaded FITS folder"))
         self.directory, browse = self._directory_row(
@@ -98,6 +99,8 @@ class ScienceQAControls(QWidget):
         self.south_directory, south = self._directory_row(
             "science_south_root", "South pilot folder or data/")
         layout.addLayout(south)
+        for entry in (self.directory, self.north_directory, self.south_directory):
+            entry.textChanged.connect(self._context_edited)
         help_text = QLabel(
             "Select the same DR9 brick and band. The comparator rejects "
             "different native WCS grids instead of silently reprojecting.")
@@ -143,6 +146,10 @@ class ScienceQAControls(QWidget):
         if selected:
             entry.setText(selected)
 
+    def _context_edited(self, *_):
+        self.clear_result()
+        self.contextChanged.emit()
+
     def set_selected_hit(self, hit: BrickHit | None):
         changed = hit != self._hit
         self._hit = hit
@@ -166,6 +173,8 @@ class ScienceQAControls(QWidget):
                 "Select a brick in the left table before running local QA.")
         self.band.blockSignals(False)
         self._update_enabled()
+        if changed:
+            self.contextChanged.emit()
 
     def current_band(self) -> str:
         return self.band.currentText()
@@ -198,6 +207,8 @@ class ScienceQAControls(QWidget):
         self.open_report.setEnabled(True)
 
     def show_error(self, error: str):
+        self._last_path = None
+        self.open_report.setEnabled(False)
         self.result.setPlainText("Scientific QA failed:\n" + error)
 
     def clear_result(self):
