@@ -18,6 +18,7 @@ from lsbpipe.surveys.qa_plots import (
 )
 from .science_workflows import science_data_root
 from .display_transfer import display_gray, display_range
+from .quality_map import quality_rgb, quality_classes, quality_summary
 
 
 LAYERS = ("image", "invvar", "nexp", "maskbits")
