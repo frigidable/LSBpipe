@@ -294,7 +294,7 @@ def test_split_satur_allmask_bright_and_quality_map(explorer):
     assert explorer.overlay_item.pixmap().toImage().pixelColor(2,3).alpha() == 0
 
 
-def test_empty_positive_log_layer_still_renders_complete_gui_colorbar(explorer):
+def test_empty_positive_log_layer_hides_colorbar_without_lying(explorer):
     data = synthetic_dataset()
     data["data"]["invvar"][:] = 0.
     data["data"]["image"][:] = -10.
@@ -302,11 +302,12 @@ def test_empty_positive_log_layer_still_renders_complete_gui_colorbar(explorer):
     explorer.set_dataset(data)
     explorer.layer.setCurrentIndex(explorer.layer.findData("invvar"))
     assert "Display rendering failed" not in explorer.render_status.text()
-    assert explorer.scale_bar.pixmap() is not None
-    assert not explorer.scale_bar.pixmap().isNull()
-    assert "log" in explorer.range_info.text()
+    assert "log unavailable" in explorer.range_info.text()
+    assert (explorer.scale_bar.pixmap() is None or
+            explorer.scale_bar.pixmap().isNull())
     explorer.layer.setCurrentIndex(explorer.layer.findData("image"))
     explorer.scaling.setCurrentIndex(explorer.scaling.findData("log"))
     assert "Display rendering failed" not in explorer.render_status.text()
-    assert explorer.scale_bar.pixmap() is not None
-    assert not explorer.scale_bar.pixmap().isNull()
+    assert "log unavailable" in explorer.range_info.text()
+    assert (explorer.scale_bar.pixmap() is None or
+            explorer.scale_bar.pixmap().isNull())
