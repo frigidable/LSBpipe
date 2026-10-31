@@ -15,7 +15,7 @@ from .qa_records import (ScienceContext, original_quartet, snapshot_inputs,
                          new_qa_run)
 
 
-ACTIONS = ("square", "masks", "figure", "compare")
+ACTIONS = ("square", "census", "masks", "figure", "compare")
 
 
 def science_data_root(directory: str | Path, *, hit: BrickHit, band: str) -> Path:
@@ -136,6 +136,43 @@ def run_science_qa(
                 f"SGA GALAXY: {result.maskbit_counts['GALAXY']:,}",
                 "Screening only: not an adopted photometric data product.",
             ]
+        elif action == "census":
+            from lsbpipe.surveys.mask_census import (
+                inspect_local_mask_census, save_mask_census)
+            result = inspect_local_mask_census(
+                data_root, field=field, release=hit.release,
+                region=hit.region, brick=hit.name, band=band,
+                target_radius_arcsec=target_radius_arcsec,
+                sky_inner_arcsec=sky_inner_arcsec,
+                sky_outer_arcsec=sky_outer_arcsec)
+            destination = staging / "mask-census.json"
+            save_mask_census(result, destination)
+            lines = [
+                f"{hit.release.upper()} {hit.region} {hit.name} · {band} band",
+                "Original four-FITS MASKBITS / numeric census · native pixels",
+                "Target/sky circular footprints intersect the TAN square.",
+            ]
+            for scope, label in (
+                    ("cutout", "Loaded cutout"),
+                    ("square", "TAN square"),
+                    ("target_in_square", "Target ∩ square"),
+                    ("sky_annulus_in_square", "Sky ring ∩ square")):
+                item = result["scope_counts"][scope]
+                n = item["pixels"]
+                valid = item["instrumental"]["usable"]
+                frac = item["usable_fraction"]
+                lines.append(
+                    f"{label}: {n:,} pixels; usable {valid:,} "
+                    f"({100*frac:.2f}%)" if frac is not None else
+                    f"{label}: no sampled pixels")
+                flags = item["maskbits"]
+                lines.append(
+                    f"  SATUR {flags['SATUR_'+band.upper()]:,}; "
+                    f"ALLMASK {flags['ALLMASK_'+band.upper()]:,}; "
+                    f"MEDIUM {flags['MEDIUM']:,}; GALAXY {flags['GALAXY']:,}")
+            lines.append(
+                "Overlapping counts and five exclusive QUALITY classes "
+                "are in the saved JSON; no adoption or source veto.")
         elif action == "masks":
             from lsbpipe.surveys.mask_localization import (
                 inspect_mask_components, save_mask_components)
