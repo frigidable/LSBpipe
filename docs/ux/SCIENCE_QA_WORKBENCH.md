@@ -41,8 +41,15 @@ files exist for the exact selected release/region/brick/band. It never
 automatically downloads, silently changes the survey region, reprojects
 mismatched WCS, or makes a photometric acceptance decision.
 
-Reports are saved under `data/qa-reports/` with explicit ICRS field
-coordinates, angular search width and product provenance in filenames.
+Every successful Science QA computation is written to a NEW, write-once
+run directory **next to the `data/` input directory**:
+`<pilotRoot>/qa-runs/<UTC-timestamp>-<random-id>/`.
+This folder contains the diagnostic JSON or PNG and `manifest.json`,
+including full field, band, aperture parameters, native input FITS paths,
+local SHA-256 fingerprints, artifact SHA-256 and the pipeline version.
+Local checksums do not verify authoritative remote archive integrity.
+Original FITS inside `data/` are not overwritten. In-progress runs
+are staged privately and published only upon successful completion.
 The right pane gives readable summary text with a button to open the
 saved JSON/PNG. Computations run in a worker QThread and should not
 freeze the desktop or force a remote map reload.
@@ -66,9 +73,12 @@ Choose the folder
 or its `data` child. Select r band.
 
 Run `Check full search square`, `Locate mask footprints`, and
-`Open four-layer FITS map`. The scientific results remain labeled
-`DIAGNOSTIC_NOT_ADOPTED`. Confirm the four-layer figure appears in
-the central Local FITS QA tab, that the Remote sky tab still works,
+`Explore original FITS interactively`. Switch the four layers and
+mask overlays, inspect cursor ICRS/pixel coordinates, and separately
+click `Export four-layer FITS map`. All results remain labeled
+`DIAGNOSTIC_NOT_ADOPTED`. Confirm the PNG preview appears in the
+`Four-layer QA` tab, that `FITS Explorer` renders separately,
+and that the `Remote sky` tab still works,
 and that no data are downloaded or modified.
 
 For the paired test choose the *separate* original North pilot folder
@@ -103,3 +113,25 @@ raster and no window-width overflow; it is not evidence about a real
 galaxy, instrument PSF or science-mask adequacy. Pixel readout,
 FITS-to-Qt y-coordinate reversal and transparency are also tested
 against deterministic in-memory arrays.
+
+## P0 context and audit-data safety (implementation)
+
+The GUI takes a frozen `ScienceContext` snapshot for each request, covering
+action, ICRS geometry, brick, band, target/sky radii, and North/South/local
+source folders. Changing any of these inputs increments a GUI generation
+counter and clears the current scientific figure and report action.
+A worker result is displayed only when both the original context
+and its submission generation still match; changing an input and
+then restoring the old value does **not** revalidate a stale result.
+For saved scientific reports, the backend additionally validates
+the frozen input context before any FITS read, checks all four
+(or eight for paired North/South) local input hashes and checks
+their integrity again before atomically publishing the run. This is
+a scientific evidence gate, not a guarantee of access isolation
+from arbitrary external file writes on the user's Windows machine.
+
+Regressions test unique run IDs, unchanged earlier records after a second
+run, failed runs leaving no completed record, modifications to input
+FITS with unchanged size/mtime, stale in-flight results and selection
+changes. This does not yet constitute a real Windows end-to-end
+acceptance of the new GUI, which will be performed later.
