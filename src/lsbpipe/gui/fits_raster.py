@@ -17,6 +17,7 @@ from lsbpipe.surveys.qa_plots import (
     _load_four_cutouts, _circle_on_sky, classify_maskbits,
 )
 from .science_workflows import science_data_root
+from .display_transfer import display_gray, display_range
 
 
 LAYERS = ("image", "invvar", "nexp", "maskbits")
@@ -25,72 +26,29 @@ LAYERS = ("image", "invvar", "nexp", "maskbits")
 # amber is Gaia MEDIUM, blue is an SGA GALAXY warning.
 OVERLAY_RGB = {
     "SATUR": (232, 71, 67),
+    "ALLMASK": (242, 119, 64),
+    "BRIGHT": (167, 104, 223),
     "MEDIUM": (249, 183, 63),
     "GALAXY": (77, 159, 230),
 }
 
 
-def _stretch(data: np.ndarray, *, kind: str, contrast: str) -> np.ndarray:
-    """Convert a 2D layer to UINT8 with explicit finite/positive rules."""
-    if contrast not in ("standard", "faint"):
-        raise ValueError("Contrast must be standard or faint")
-    values = np.asarray(data)
-    if values.ndim != 2:
-        raise ValueError("FITS display requires a 2D layer")
-    if kind == "maskbits":
-        raise ValueError("MASKBITS must use categorical color, not flux stretch")
-    arr = values.astype(np.float64, copy=False)
-    valid = np.isfinite(arr)
-    if kind == "invvar":
-        valid &= arr > 0
-    if kind == "nexp":
-        valid &= arr >= 0
-    output = np.zeros(arr.shape, dtype=np.uint8)
-    if not np.any(valid):
-        return output
-    selected = arr[valid]
-    # The integer NEXP map retains linear value meaning; its black = zero
-    # is not a star-formation or depth decision.
-    if kind == "nexp":
-        hi = float(np.max(selected))
-        if hi > 0:
-            output[valid] = np.clip(
-                np.rint(255. * selected / hi), 0, 255).astype(np.uint8)
-        return output
-    if kind == "invvar":
-        arr = np.zeros(arr.shape, dtype=np.float64)
-        arr[valid] = np.log10(selected)
-        selected = arr[valid]
-    # Deterministic sampling for large cutouts. Image is pre-existing
-    # coadd pixel data; these display percentiles are NOT physical sky.
-    step = max(1, selected.size // 250000)
-    sample = selected[::step]
-    if kind == "image":
-        low, high = np.percentile(
-            sample, (2., 98.5) if contrast == "faint" else (1., 99.7))
-    else:
-        low, high = np.percentile(sample, (3., 97.))
-    if not np.isfinite(low) or not np.isfinite(high):
-        return output
-    if high <= low:
-        if high == low:
-            output[valid] = 128
-        return output
-    x = np.clip((arr[valid] - low) / (high - low), 0., 1.)
-    if kind == "image":
-        strength = 24. if contrast == "faint" else 7.
-        x = np.arcsinh(strength * x) / np.arcsinh(strength)
-    output[valid] = np.rint(255. * x).astype(np.uint8)
-    return output
-
-
+def _stretch(data, *, kind, contrast, scaling="auto", limits=None):
+    return display_gray(data, kind, contrast=contrast,
+                        scaling=scaling, limits=limits)
 
 
 def rgb_for_layer(data: np.ndarray, kind: str, band: str,
-                  contrast: str = "standard") -> np.ndarray:
+                  contrast: str = "standard", *,
+                  scaling: str = "auto", limits=None,
+                  numeric_layers: dict | None = None) -> np.ndarray:
     """Return display RGB in FITS row order; GUI must invert y for screen."""
-    if kind not in LAYERS:
+    if kind not in (*LAYERS, "quality"):
         raise ValueError("Unsupported FITS layer")
+    if kind == "quality":
+        if numeric_layers is None:
+            raise ValueError("Quality map needs original four FITS layers")
+        return quality_rgb(numeric_layers, band)
     if kind == "maskbits":
         category = classify_maskbits(data, band)
         palette = np.asarray([
@@ -100,7 +58,8 @@ def rgb_for_layer(data: np.ndarray, kind: str, band: str,
             (216, 77, 70),   # saturation/allmask
         ], dtype=np.uint8)
         return palette[category]
-    gray = _stretch(data, kind=kind, contrast=contrast)
+    gray = _stretch(data, kind=kind, contrast=contrast,
+                    scaling=scaling, limits=limits)
     if kind == "image":
         return np.repeat(gray[:, :, None], 3, axis=2)
     if kind == "nexp":
