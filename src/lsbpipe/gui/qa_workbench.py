@@ -26,6 +26,7 @@ class ScienceQAControls(QWidget):
         self._hit = None
         self._busy = False
         self._last_path = None
+        self._last_manifest_path = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -120,6 +121,14 @@ class ScienceQAControls(QWidget):
         self.open_report.setEnabled(False)
         self.open_report.clicked.connect(self._open_last)
         layout.addWidget(self.open_report)
+        self.open_manifest = QPushButton("View run provenance manifest")
+        self.open_manifest.setObjectName("science_open_manifest")
+        self.open_manifest.setToolTip(
+            "Open the immutable run receipt: ICRS field, apertures, "
+            "original FITS SHA-256, analysis parameters and artifact hash")
+        self.open_manifest.setEnabled(False)
+        self.open_manifest.clicked.connect(self._open_manifest)
+        layout.addWidget(self.open_manifest)
         layout.addStretch()
         self._update_enabled()
 
@@ -198,22 +207,34 @@ class ScienceQAControls(QWidget):
                 (name != "compare" or self._hit.release == "dr9"))
 
     def show_result(self, result: dict):
+        run_id = result.get("run_id")
+        manifest = result.get("manifest_path")
+        receipt = (
+            "\n\nRun ID: " + str(run_id) if run_id else "")
+        if manifest:
+            receipt += "\nInput/output provenance: " + str(manifest)
         self.result.setPlainText(
             result["summary"] + "\n\n"
-            "Saved locally:\n" + result["path"])
+            "Saved locally:\n" + result["path"] + receipt)
         self._last_path = result["path"]
+        self._last_manifest_path = manifest
+        self.open_manifest.setEnabled(bool(manifest))
         self.open_report.setText(
             "Open FITS image" if result["is_figure"] else "Open saved JSON")
         self.open_report.setEnabled(True)
 
     def show_error(self, error: str):
         self._last_path = None
+        self._last_manifest_path = None
         self.open_report.setEnabled(False)
+        self.open_manifest.setEnabled(False)
         self.result.setPlainText("Scientific QA failed:\n" + error)
 
     def clear_result(self):
         self._last_path = None
+        self._last_manifest_path = None
         self.open_report.setEnabled(False)
+        self.open_manifest.setEnabled(False)
         self.result.setPlainText(
             "Target, brick or band selection changed. Verify original FITS "
             "provenance and rerun this diagnostic to avoid stale results.")
@@ -221,3 +242,8 @@ class ScienceQAControls(QWidget):
     def _open_last(self):
         if self._last_path is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._last_path))
+
+    def _open_manifest(self):
+        if self._last_manifest_path is not None:
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(self._last_manifest_path))
