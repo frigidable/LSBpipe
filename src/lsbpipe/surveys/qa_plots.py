@@ -201,7 +201,7 @@ def render_qa_figure(*, directory: Path, release: str, region: str,
             colorbar.set_label(label, fontsize=8)
         return im
 
-    show(plot_axes[0], image, "Original IMAGE · r-band flux",
+    show(plot_axes[0], image, f"Original IMAGE · {band}-band flux",
          norm=flux_norm, colormap="gray", label="nanomaggy")
     show(plot_axes[1], ivar_log, "Original INVVAR (log10)",
          label="log10 inverse (nanomaggy²)")
