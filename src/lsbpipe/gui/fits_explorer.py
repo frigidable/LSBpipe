@@ -206,8 +206,9 @@ class FITSExplorer(QWidget):
         self.color_legend = QLabel(
             "Red: SATUR  ·  Orange: ALLMASK  ·  Purple: BRIGHT  ·  "
             "Amber: MEDIUM  ·  Blue: GALAXY  ·  Magenta: no data. "
-            "QUALITY: green valid, amber catalog warning, red/orange "
-            "instrumental rejection, magenta numeric invalid. Display only.")
+            "QUALITY: green zero-bit valid, amber other MASKBITS flags, "
+            "red/orange instrumental rejection, magenta numeric invalid. "
+            "Display only.")
         self.color_legend.setObjectName("fits_overlay_legend")
         self.color_legend.setWordWrap(True)
         layout.addWidget(self.color_legend)
@@ -548,7 +549,7 @@ class FITSExplorer(QWidget):
                     "QUALITY · original cutout pixel centers "
                     f"({total:,}): "
                     f"valid clean {categories['clean']:,}; "
-                    f"catalog warning, still valid {categories['catalog_warning_not_excluded']:,}; "
+                    f"other MASKBITS (not auto-excluded) {categories['other_bit_not_excluded']:,}; "
                     f"SATUR {categories['satur']:,}; "
                     f"ALLMASK {categories['allmask']:,}; "
                     f"numeric invalid {categories['bad_numeric']:,}. "
