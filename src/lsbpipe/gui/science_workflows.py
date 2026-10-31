@@ -44,14 +44,6 @@ def science_data_root(directory: str | Path, *, hit: BrickHit, band: str) -> Pat
         "Expected paths, relative to data root: " + ", ".join(missing))
 
 
-def _file_stem(field: SkyField, hit: BrickHit, band: str) -> str:
-    # Keep separate contexts distinct even inside the same download root.
-    identity = (f"{hit.release}_{hit.region}_{hit.name}_{band}_"
-                f"{field.ra_deg:.10f}_{field.dec_deg:+.10f}_"
-                f"{field.width_arcmin:.5f}arcmin")
-    return re.sub(r"[^a-zA-Z0-9_.+-]", "_", identity)
-
-
 def run_science_qa(
     action: str, *, field: SkyField, hit: BrickHit, band: str,
     directory: str | Path, north_directory: str | Path = "",
