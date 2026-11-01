@@ -7,6 +7,7 @@ imported by the scientific numerical core.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Callable
 
@@ -66,6 +67,44 @@ class TaskWorker(QObject):
             self.failed.emit(f'{type(exc).__name__}: {exc}')
         finally:
             self.finished.emit()
+
+
+class _TaskDispatch(QObject):
+    """Deliver Python callbacks only on the thread owning the GUI QObject.
+
+    Plain functions/lambdas connected directly to worker signals can execute
+    on the worker thread under PySide6. GUI widgets and QMessageBox must never
+    be touched from that thread (QTextDocument/QBasicTimer native crash).
+    """
+
+    def __init__(self, owner: "SurveyExplorer", completed: Callable,
+                 on_error: Callable | None):
+        super().__init__(owner)
+        self._owner = owner
+        self._completed = completed
+        self._on_error = on_error
+
+    @Slot(object)
+    def deliver_completed(self, value):
+        try:
+            self._completed(value)
+        except Exception as exc:
+            logging.exception("LSBpipe GUI completion callback failed")
+            self.deliver_failed(f"{type(exc).__name__}: {exc}")
+
+    @Slot(str)
+    def deliver_failed(self, message: str):
+        self._owner.message.setText(message)
+        if self._on_error is not None:
+            try:
+                self._on_error(message)
+            except Exception:
+                logging.exception("LSBpipe GUI error callback failed")
+        QMessageBox.warning(self._owner, "Survey operation failed", message)
+
+    @Slot(object)
+    def deliver_progress(self, value):
+        self._owner._progress(value)
 
 
 class TargetTextField(QLineEdit):
@@ -131,6 +170,7 @@ class SurveyExplorer(QMainWindow):
         self.manifest = None
         self.worker = None
         self.thread = None
+        self._task_dispatch = None
         self._brick_overlay_features = []
         self._brick_overlay_keys = []
         self._qa_pixmap = None
@@ -797,26 +837,31 @@ class SurveyExplorer(QMainWindow):
         self.science_qa.set_busy(True)
         thread = QThread(self)
         worker = TaskWorker(action)
+        # The receiver is a QObject created in the main thread. Its decorated
+        # slots force queued cross-thread delivery even for Python closures.
+        # Keep it alive until QThread.finished, never until worker.finished:
+        # pending completion/progress events may still be in the GUI queue.
+        dispatch = _TaskDispatch(self, finished, on_error)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.completed.connect(finished)
-        worker.failed.connect(lambda msg: (
-            self.message.setText(msg),
-            QMessageBox.warning(self, "Survey operation failed", msg)))
-        if on_error is not None:
-            worker.failed.connect(on_error)
-        worker.progress.connect(self._progress)
+        worker.completed.connect(dispatch.deliver_completed, Qt.QueuedConnection)
+        worker.failed.connect(dispatch.deliver_failed, Qt.QueuedConnection)
+        worker.progress.connect(dispatch.deliver_progress, Qt.QueuedConnection)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(dispatch.deleteLater)
         thread.finished.connect(self._idle)
+        self._task_dispatch = dispatch
         self.worker = worker
         self.thread = thread
         thread.start()
 
+    @Slot()
     def _idle(self):
         self.thread = None
         self.worker = None
+        self._task_dispatch = None
         self.search_btn.setEnabled(True)
         self.download_btn.setEnabled(True)
         self.verify_btn.setEnabled(True)
