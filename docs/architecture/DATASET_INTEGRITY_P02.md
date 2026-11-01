@@ -28,7 +28,9 @@ Backend:
   verify science HDU selection, image shape, celestial WCS coherence,
   optional FITS CHECKSUM/DATASUM if present, numerical validity, expected
   IMAGE units when supplied, MASKBITS integer type, local SHA-256, size,
-  timestamp and HDU metadata.
+  timestamp and HDU metadata. Before publishing the audit it hashes
+  every validated original again and refuses the result if even one file
+  changed during the verification/footprint workflow.
 - `audit_dataset_root(data_root, field, pitch_arcsec=2.)`: verify all
   discovered datasets and evaluate a **fixed sampled TAN sky grid** if an
   explicit ICRS target field is given. Hard limit is 160000 sky cells and
