@@ -228,3 +228,40 @@ Hub; legacy CLI remains supported.
   does not revive stale background callbacks.
 - GUI tests on Qt Windows with metadata migrations, Unicode names, settings
   isolation, long project lists and DPI/keyboard accessibility.
+
+
+## Implementation record — first object-centric vertical slice
+
+The implementation now uses a **compatibility companion manifest** named
+`lsbpipe-object.json` with schema `lsbpipe.object-project/1`.
+The earlier `lsbpipe-project.json` with schema
+`lsbpipe.local-project/0.1` remains untouched when importing existing
+galaxy folders. This reduces migration risk, avoids rewriting old QA state,
+and allows rollback by using the previous GUI version. A later, explicit
+versioned migration may consolidate the files once on-device recovery is
+proven. The companion file is the authoritative object-project identity;
+legacy metadata remains an input for imported FITS provenance.
+
+Implemented in the latest Draft PR #6:
+- `src/lsbpipe/surveys/object_projects.py`: create/read/save, UUIDv4,
+  empty projects, optional ICRS coordinates, registry, rename-friendly
+  IDs, import of old downloads, moved-folder relinking.
+- `src/lsbpipe/gui/project_hub.py`: startup hub, recent-project filter,
+  three-step new-project wizard, import preview, continue/relink and
+  explicit return from workspace.
+- `src/lsbpipe/gui/survey_explorer.py`: object-bound context, no
+  automatic remote viewer on entry, saved target, linked local data,
+  background-job switch protection.
+- `src/lsbpipe/gui/__main__.py` and installed GUI entry point both
+  start Project Hub.
+- Scientific and Qt regression tests with per-test settings isolation.
+- The offline screenshot evidence now includes Hub with empty/recent
+  library states at three viewport sizes.
+
+Still future work, explicitly **not** represented as complete:
+- Optional authenticated/explicit SIMBAD discovery and candidate
+  acceptance in the new-project wizard.
+- Importing arbitrary preexisting full photometry pipelines, restoring
+  unfinished in-memory computations, building a multi-workspace tabbed UI.
+- Full catalog metadata capture, portable external file relinking beyond
+  the current local registry, and scientific adoption of any FITS.
