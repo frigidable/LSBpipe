@@ -268,6 +268,17 @@ def open_local_project(directory: str | Path, *,
                                "revalidated on reopen)",
                     "provenance": list(selected),
                 }
+                if metadata is None:
+                    # Pre-session QA receipts also retain the exact screening
+                    # radii. Restore them only when their ordering is valid.
+                    try:
+                        t = float(context["target_radius_arcsec"])
+                        i = float(context["sky_inner_arcsec"])
+                        o = float(context["sky_outer_arcsec"])
+                        if 0 < t <= i < o <= 1200:
+                            target, inner, outer = t, i, o
+                    except (KeyError, ValueError, TypeError):
+                        pass
                 break
     return LocalProject(
         root=project_root, data_root=data_root, field=field,
