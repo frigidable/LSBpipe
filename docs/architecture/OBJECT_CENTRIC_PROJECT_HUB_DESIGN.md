@@ -1,6 +1,6 @@
 # LSBpipe — Object-centric Project Hub, project lifecycle and catalog identity
 Status: architectural design proposal, 2026-11-01. Not implemented as a launcher.
-Target: existing Draft PR #6 (\`feature/science-qa-gui\`) or dedicated downstream feature branch.
+Target: existing Draft PR #6 (`feature/science-qa-gui`) or dedicated downstream feature branch.
 No science/photometry acceptance is implied.
 
 ## Product decision
@@ -59,7 +59,7 @@ Stage A **Object**:
     Do not infer name from a search result without the user selecting it.
   - Coordinates: accepted ICRS target center in decimal degrees, separately
     from any catalog position. Coordinates may be entered explicitly; if
-    unknown, create a draft project with state \`NEEDS_TARGET_POSITION\`
+    unknown, create a draft project with state `NEEDS_TARGET_POSITION`
     and disable *spatially sensitive* operations until specified.
   - Optional explicit 'Search SIMBAD' to propose recognized names/positions.
 Stage B **Data**:
@@ -77,11 +77,11 @@ confirmation and refuses overwriting an occupied unrelated directory.
 
 ## Data model / durable metadata
 
-Use a new versioned schema, e.g. \`lsbpipe.object-project/1\`, with migrations
-from \`lsbpipe.local-project/0.1\`. Never reinterpret older schemas in place
+Use a new versioned schema, e.g. `lsbpipe.object-project/1`, with migrations
+from `lsbpipe.local-project/0.1`. Never reinterpret older schemas in place
 without a dry-run, backup and explicit migration outcome.
 
-\`\`\`text
+```text
 project_id: UUIDv4 immutable, local—not SIMBAD OID or Legacy brick
 display_name: user-editable; aliases: [explicit or catalog-derived]
 primary_target:
@@ -97,17 +97,17 @@ datasets[]:
 footprints[]: center, TAN width, science aperture definitions
 analysis_runs[]: immutable QA run references, parameter/input fingerprints
 session: selected dataset, active workbench/tab, preferences
-\`\`\`
+```
 
 Original FITS are immutable and addressed by validated paths. Project
-metadata and caches reside outside \`data/\`; project-specific provenance
+metadata and caches reside outside `data/`; project-specific provenance
 in the project root. Global index in %LOCALAPPDATA%/LSBpipe stores UUID,
 display name, root and last-opened, **not** the source of astronomical truth.
 A portable project opens by its own manifest even if the global index is
 gone. Missing/moved roots mark 'unavailable'; give 'Relink' without deleting
 or silently recreating directories.
 
-Avoid conflating \`project_id\`, galactic object identifier, selected FITS
+Avoid conflating `project_id`, galactic object identifier, selected FITS
 brick and primary source astrometry. **No filename may determine the exact
 target center.** Legacy brick names encode tiling and do not identify a galaxy.
 
@@ -116,9 +116,9 @@ target center.** Legacy brick names encode tiling and do not identify a galaxy.
 A SIMBAD integration is an **explicit resolver and metadata suggestion**,
 not automatic two-way synchronization or authoritative scientific input.
 
-- For a user-entered name, call \`astroquery.simbad.Simbad.query_object\`
-  and optionally \`query_objectids\` in a worker, with timeout, result cap
-  and cache. For manually entered coordinates, call \`query_region\` with
+- For a user-entered name, call `astroquery.simbad.Simbad.query_object`
+  and optionally `query_objectids` in a worker, with timeout, result cap
+  and cache. For manually entered coordinates, call `query_region` with
   a bounded, user-visible radius, return multiple candidates and their
   angular separation and object types.
 - Never accept 'nearest sky object' blindly. Nearby stars, a galaxy nucleus
@@ -137,8 +137,8 @@ not automatic two-way synchronization or authoritative scientific input.
 - No network during startup, project browse or local FITS import.
   Search is an explicit action; refresh is explicit, with a visible
   difference diff/accept flow; use a polite bounded request rate, identify
-  the client, cache repeat queries. Make \`astroquery\` an optional package
-  extra, e.g. \`[catalog]\`, not part of the offline GUI requirement.
+  the client, cache repeat queries. Make `astroquery` an optional package
+  extra, e.g. `[catalog]`, not part of the offline GUI requirement.
 - The CDS SIMBAD database is a heterogeneous literature meta-compilation,
   not a homogeneous photometric measurement catalog; unlabeled values are
   not science-ready. For extragalactic measurements an eventual optional
@@ -155,24 +155,24 @@ names; avoid hardcoding older pre-TAP result fields.
 ## Migration from currently downloaded UGC_2162
 
 Previous original FITS are already at
-\`C:\Users\frigi\Documents\PhD\LSBpipeData\UGC_2162\` and the object
+`C:\Users\frigi\Documents\PhD\LSBpipeData\UGC_2162` and the object
 search center is RA 40.096208 deg, Dec +1.229250 deg, TAN width 5'.
 This is user-established metadata, **not** a verified SIMBAD cross-match.
 
-Show 'Import existing' with discovery of \`data/dr9/<region>/...\` as well
-as direct \`dr9/<region>/...\`. Recover field from existing
-\`lsbpipe-project.json\` first, then \`download-report.json\`, otherwise
+Show 'Import existing' with discovery of `data/dr9/<region>/...` as well
+as direct `dr9/<region>/...`. Recover field from existing
+`lsbpipe-project.json` first, then `download-report.json`, otherwise
 present explicit coordinate confirmation. Capture selected North/South and
-band; continue using original paths. Index \`qa-runs\` manifests as prior
+band; continue using original paths. Index `qa-runs` manifests as prior
 **diagnostics**, not as revalidated accepted science. Preserve previous
-project files and previous QA manifests; migrate \`0.1\` to new identity
+project files and previous QA manifests; migrate `0.1` to new identity
 without modifying original FITS.
 
-The existing \`open_local_project\` cannot create a zero-FITS project;
+The existing `open_local_project` cannot create a zero-FITS project;
 new-project metadata initialization must be decoupled from inventory
-scanning. Existing \`SurveyExplorer.__init__\` immediately builds the
+scanning. Existing `SurveyExplorer.__init__` immediately builds the
 QWebEngine workspace and conditionally restores last project: refactor
-\`main\` to launch the Hub first and instantiate Explorer only after
+`main` to launch the Hub first and instantiate Explorer only after
 selection. The old GUI's download/search screen becomes a child workbench
 within the selected project. Old auto-resume becomes 'Continue last' on
 Hub; legacy CLI remains supported.
