@@ -116,12 +116,15 @@ class LocalProject:
 
 
 def open_local_project(directory: str | Path, *,
-                       fallback_field: SkyField | None = None) -> LocalProject:
+                       fallback_field: SkyField | None = None,
+                       authoritative_field: SkyField | None = None,
+                       authoritative_selected: tuple[str, str, str, str] | None = None,
+                       ) -> LocalProject:
     """Recover survey provenance from original paths, not from network/catalog.
 
-    A download-report or project.json gives target coordinates. Without either,
-    caller must provide explicit current ICRS coordinates; brick name alone
-    does not determine a galaxy center.
+    A download-report or legacy project.json gives target coordinates.
+    With an object-project, authoritative_field overrides both legacy sources
+    WITHOUT writing to them. Brick names never imply galaxy coordinates.
     """
     root = Path(directory).expanduser().resolve()
     if not root.is_dir():
@@ -149,7 +152,12 @@ def open_local_project(directory: str | Path, *,
 
     field_payload = ((metadata or {}).get("field") or
                      (report or {}).get("field"))
-    if field_payload is None:
+    if authoritative_field is not None:
+        if not isinstance(authoritative_field, SkyField):
+            raise ValueError("Object project has invalid authoritative ICRS field")
+        field = authoritative_field
+        source = "object-project"
+    elif field_payload is None:
         if fallback_field is None:
             raise ValueError(
                 "No saved target coordinates. Enter the actual ICRS RA/Dec "
@@ -196,7 +204,15 @@ def open_local_project(directory: str | Path, *,
     saved = metadata or {}
     selected = None
     value = saved.get("selected")
-    if isinstance(value, list) and len(value) == 4:
+    if authoritative_selected is not None:
+        if (not isinstance(authoritative_selected, tuple) or
+                len(authoritative_selected) != 4):
+            raise ValueError("Invalid authoritative dataset selection")
+        if authoritative_selected in complete:
+            selected = authoritative_selected
+        # Never select a conflicting old session key when the object project's
+        # requested dataset is missing: choose a present dataset instead.
+    elif isinstance(value, list) and len(value) == 4:
         key = tuple(value)
         if key in complete:
             selected = key
