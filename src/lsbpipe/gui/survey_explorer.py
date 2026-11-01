@@ -593,12 +593,17 @@ class SurveyExplorer(QMainWindow):
         self.setWindowTitle(
             f"LSBpipe · {project.display_name} · Galaxy Workspace")
         self.open_project_btn.setVisible(False)
-        if project.data_root is not None and project.data_root.is_dir():
+        if (project.field is not None and
+                project.data_root is not None and project.data_root.is_dir()):
             from lsbpipe.surveys.local_project import _candidate_images
             if any(_candidate_images(project.data_root)):
-                # Legacy inventory and QA history remain the canonical
-                # evidence for existing science FITS.
-                self._open_local_project_folder(project.data_root)
+                # The object passport owns the adopted target center, chosen
+                # dataset and apertures. Legacy metadata supplies ONLY the
+                # read-only on-disk inventory on subsequent openings.
+                if not self._open_local_project_folder(
+                        project.data_root, from_object=True):
+                    raise ValueError(
+                        "Cannot open this project's saved original FITS inventory")
                 return
         self._restoring_local_project = True
         try:
@@ -607,7 +612,15 @@ class SurveyExplorer(QMainWindow):
             self.bricks.setRowCount(0)
             self.files.setRowCount(0)
             self.science_qa.set_selected_hit(None)
-            self.science_qa.set_data_root(project.root / "data")
+            self.science_qa.set_data_root(
+                project.data_root if project.data_root is not None
+                else project.root / "data")
+            for widget, value in (
+                (self.target_radius, project.target_radius_arcsec),
+                (self.sky_inner, project.sky_inner_arcsec),
+                (self.sky_outer, project.sky_outer_arcsec),
+            ):
+                widget.setValue(value)
             if project.field is None:
                 self.ra.clear()
                 self.dec.clear()
@@ -649,19 +662,24 @@ class SurveyExplorer(QMainWindow):
             return
         from lsbpipe.surveys.object_projects import save_object_project
         try:
-            # Invalid intermediate edit drafts never erase the last accepted
-            # astronomical position. When both fields are intentionally blank,
-            # the project remains a position-unresolved draft.
-            if not self.ra.text().strip() and not self.dec.text().strip():
-                project.field = None
-            else:
-                project.field = self._field()
+            # Resolve the entire new state before touching the manifest.
+            # Invalid text drafts never persist half an ICRS position.
+            new_field = (
+                None if not self.ra.text().strip() and not self.dec.text().strip()
+                else self._field())
             row = self.bricks.currentRow()
-            if self.bricks.selectedItems() and 0 <= row < len(self.hits):
+            selected = project.selected_dataset
+            if (self._brick_result_matches_target()
+                    and self.bricks.selectedItems()
+                    and 0 <= row < len(self.hits)):
                 hit = self.hits[row]
-                project.selected_dataset = (
-                    hit.release, hit.region, hit.name,
-                    self.science_qa.current_band())
+                selected = (hit.release, hit.region, hit.name,
+                            self.science_qa.current_band())
+            project.field = new_field
+            project.selected_dataset = selected
+            project.target_radius_arcsec = self.target_radius.value()
+            project.sky_inner_arcsec = self.sky_inner.value()
+            project.sky_outer_arcsec = self.sky_outer.value()
             if self._local_project is not None:
                 project.data_root = self._local_project.data_root
                 if self._local_project.last_science:
@@ -679,23 +697,41 @@ class SurveyExplorer(QMainWindow):
         if directory:
             self._open_local_project_folder(directory)
 
-    def _open_local_project_folder(self, directory, *, startup=False):
-        """Import existing science files without any archive HTTP request."""
+    def _open_local_project_folder(self, directory, *, startup=False,
+                                   from_object=False):
+        """Read-only original FITS discovery, with object passport authority."""
         try:
+            obj = self._object_project
             fallback = (self._field() if self._manual_target_edited
-                        and not startup else None)
-            project = open_local_project(directory, fallback_field=fallback)
+                        and not startup and not from_object else None)
+            if from_object and (obj is None or obj.field is None):
+                raise ValueError("Object project requires an accepted ICRS position")
+            project = open_local_project(
+                directory, fallback_field=fallback,
+                authoritative_field=obj.field if from_object else None,
+                authoritative_selected=obj.selected_dataset if from_object
+                else None)
+            if from_object:
+                project.target_radius_arcsec = obj.target_radius_arcsec
+                project.sky_inner_arcsec = obj.sky_inner_arcsec
+                project.sky_outer_arcsec = obj.sky_outer_arcsec
+                project.last_science = obj.last_science
         except (OSError, ValueError, KeyError) as exc:
             self.project_status.setText(f"Cannot open local project: {exc}")
             if not startup:
                 QMessageBox.warning(self, "Cannot open local FITS project", str(exc))
             return False
         self._install_local_project(project)
-        try:
-            save_local_project(project)
-        except (OSError, ValueError) as exc:
-            self.project_status.setText(
-                f"Local files opened, but session could not be saved: {exc}")
+        if self._object_project is None:
+            # Legacy standalone mode continues its established session
+            # writer. In object-project mode the old 0.1 file is immutable.
+            try:
+                save_local_project(project)
+            except (OSError, ValueError) as exc:
+                self.project_status.setText(
+                    f"Local files opened, but session could not be saved: {exc}")
+        else:
+            self._queue_project_save()
         return True
 
     def _restore_last_project(self):
@@ -827,6 +863,9 @@ class SurveyExplorer(QMainWindow):
 
     def _save_project_state(self):
         self._save_object_project_context()
+        if self._object_project is not None:
+            # Never touch the old project schema after object migration.
+            return
         project = self._local_project
         if project is None or self._restoring_local_project:
             return
