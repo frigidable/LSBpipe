@@ -162,9 +162,10 @@ class TargetTextField(QLineEdit):
 
 
 class SurveyExplorer(QMainWindow):
-    """Initial desktop flow: ICRS target -> release bricks -> file plan -> download."""
+    """Object-bound Legacy FITS workspace; may also run in legacy standalone mode."""
+    returnToProjects = Signal()
 
-    def __init__(self):
+    def __init__(self, *, restore_session=True, launch_remote=True):
         super().__init__()
         self.setWindowTitle("LSBpipe — Legacy Survey Explorer (experimental)")
         self.resize(1460, 880)
@@ -179,6 +180,10 @@ class SurveyExplorer(QMainWindow):
         self._qa_generation = 0
         self._last_download_root = None
         self._local_project = None
+        self._object_project = None
+        self._returning_to_hub = False
+        self._restore_session = restore_session
+        self._launch_remote = launch_remote
         self._restoring_local_project = False
         self._manual_target_edited = False
         self._project_save_timer = QTimer(self)
@@ -186,7 +191,8 @@ class SurveyExplorer(QMainWindow):
         self._project_save_timer.setInterval(250)
         self._project_save_timer.timeout.connect(self._save_project_state)
         self._build_ui()
-        self._restore_last_project()
+        if self._restore_session:
+            self._restore_last_project()
 
     def _build_ui(self):
         # Geometry/legibility rules only; retain OS light/dark palette.
@@ -286,6 +292,11 @@ class SurveyExplorer(QMainWindow):
         self.external_btn.clicked.connect(self.open_viewer_in_browser)
         secondary_actions.addWidget(self.external_btn)
         target_form.addLayout(secondary_actions)
+        self.back_to_projects = QPushButton("← All galaxy projects")
+        self.back_to_projects.setObjectName("workspace_back_to_projects")
+        self.back_to_projects.clicked.connect(self._go_back_to_projects)
+        self.back_to_projects.setVisible(False)
+        target_form.addWidget(self.back_to_projects)
         self.open_project_btn = QPushButton("Open existing FITS project…")
         self.open_project_btn.setObjectName("open_existing_local_project")
         self.open_project_btn.setToolTip(
@@ -569,8 +580,96 @@ class SurveyExplorer(QMainWindow):
         # Navigation to a remote web application is deliberately explicit.
         # RA/Dec spinbox edits must not trigger many remote page reloads.
         # Auto-resume does not require contacting the hosted Legacy Viewer.
-        if last_project_directory() is None:
+        if self._launch_remote and last_project_directory() is None:
             self.show_viewer()
+
+    def attach_object_project(self, project):
+        """Bind explicit project identity before any remote/viewer operations."""
+        from lsbpipe.surveys.object_projects import ObjectProject
+        if not isinstance(project, ObjectProject):
+            raise TypeError("Workspace requires an object-project record")
+        self._object_project = project
+        self.back_to_projects.setVisible(True)
+        self.setWindowTitle(
+            f"LSBpipe · {project.display_name} · Galaxy Workspace")
+        self.open_project_btn.setVisible(False)
+        if project.data_root is not None and project.data_root.is_dir():
+            from lsbpipe.surveys.local_project import _candidate_images
+            if any(_candidate_images(project.data_root)):
+                # Legacy inventory and QA history remain the canonical
+                # evidence for existing science FITS.
+                self._open_local_project_folder(project.root)
+                return
+        self._restoring_local_project = True
+        try:
+            self.hits = []
+            self.manifest = None
+            self.bricks.setRowCount(0)
+            self.files.setRowCount(0)
+            self.science_qa.set_selected_hit(None)
+            self.science_qa.set_data_root(project.root / "data")
+            if project.field is None:
+                self.ra.clear()
+                self.dec.clear()
+                self.field_width.setValue(5.)
+                self.target_hint.setText(
+                    "No ICRS position yet · enter RA and Dec before Find data")
+                self.project_status.setText(
+                    f"{project.display_name} · draft target · no FITS")
+            else:
+                self.ra.setValue(project.field.ra_deg)
+                self.dec.setValue(project.field.dec_deg)
+                self.field_width.setValue(project.field.width_arcmin)
+                self.target_hint.setText(
+                    "Object project ready · choose Find data to discover FITS")
+                self.project_status.setText(
+                    f"{project.display_name} · target defined · no FITS")
+            self.inspector_tabs.setCurrentWidget(self.science_qa)
+            self.data_drawer.show()
+            self._size_data_drawer()
+            self.preview_tabs.setCurrentWidget(self.fits_explorer)
+            self.message.setText(
+                f"Project {project.display_name} opened offline. "
+                "No survey archive search has been performed.")
+        finally:
+            self._restoring_local_project = False
+
+    def _go_back_to_projects(self):
+        if self.thread is not None:
+            QMessageBox.information(
+                self, "Operation running",
+                "Finish the active task before leaving this galaxy project.")
+            return
+        self._save_project_state()
+        self.returnToProjects.emit()
+
+    def _save_object_project_context(self):
+        project = self._object_project
+        if project is None or self._restoring_local_project:
+            return
+        from lsbpipe.surveys.object_projects import save_object_project
+        try:
+            # Invalid intermediate edit drafts never erase the last accepted
+            # astronomical position. When both fields are intentionally blank,
+            # the project remains a position-unresolved draft.
+            if not self.ra.text().strip() and not self.dec.text().strip():
+                project.field = None
+            else:
+                project.field = self._field()
+            row = self.bricks.currentRow()
+            if self.bricks.selectedItems() and 0 <= row < len(self.hits):
+                hit = self.hits[row]
+                project.selected_dataset = (
+                    hit.release, hit.region, hit.name,
+                    self.science_qa.current_band())
+            if self._local_project is not None:
+                project.data_root = self._local_project.data_root
+                if self._local_project.last_science:
+                    project.last_science = self._local_project.last_science
+            save_object_project(project)
+        except (ValueError, OSError) as exc:
+            self.project_status.setText(
+                f"Project remains open; saving its context failed: {exc}")
 
     def _open_project_dialog(self):
         initial = (last_project_directory() or
@@ -719,12 +818,15 @@ class SurveyExplorer(QMainWindow):
             "rerun the diagnostic before scientific use.")
 
     def _queue_project_save(self):
-        if (self._local_project is not None and
-                not self._restoring_local_project and
+        if self._restoring_local_project:
+            return
+        if self._object_project is not None or (
+                self._local_project is not None and
                 self._brick_result_matches_target()):
             self._project_save_timer.start()
 
     def _save_project_state(self):
+        self._save_object_project_context()
         project = self._local_project
         if project is None or self._restoring_local_project:
             return
@@ -1774,6 +1876,10 @@ class SurveyExplorer(QMainWindow):
         else:
             self._project_save_timer.stop()
             self._save_project_state()
+            if self._object_project is not None and not self._returning_to_hub:
+                self.returnToProjects.emit()
+                event.ignore()
+                return
             super().closeEvent(event)
 
 
