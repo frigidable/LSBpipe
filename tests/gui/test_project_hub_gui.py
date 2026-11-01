@@ -269,3 +269,60 @@ def test_missing_saved_dataset_requires_explicit_new_selection(
     w._go_back_to_projects()
     assert read_object_project(root).selected_dataset == (
         "dr9", "south", "0401p012", "r")
+
+
+def test_project_wide_dataset_audit_runs_without_brick_selection(
+        hub, qtbot, tmp_path):
+    """Real worker: audit original FITS and save receipt inside project root."""
+    import json
+    import numpy as np
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from lsbpipe.surveys.legacy import BrickHit, product_for
+    field = SkyField(40.096208, 1.22925, 1.)
+    p = create_object_project("UGC 2162 deep audit", tmp_path / "UGC_2162",
+                              field=field)
+    data = p.root / "data"
+    hit = BrickHit("dr9", "south", "0401p012", 0, 0, 0, 0, {"r": 2})
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = [32.5, 32.5]
+    wcs.wcs.cdelt = [-1/3600, 1/3600]
+    wcs.wcs.crval = [field.ra_deg, field.dec_deg]
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    arrays = {
+        "image": np.ones((64, 64), dtype=np.float32),
+        "invvar": np.ones((64, 64), dtype=np.float32),
+        "nexp": np.ones((64, 64), dtype=np.int16),
+        "maskbits": np.zeros((64, 64), dtype=np.int16),
+    }
+    for kind, arr in arrays.items():
+        item = product_for(hit, kind, None if kind == "maskbits" else "r")
+        file = data / item.relative_path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        if kind == "maskbits":
+            fits.HDUList([fits.PrimaryHDU(),
+                fits.ImageHDU(data=arr, header=wcs.to_header())]).writeto(file)
+        else:
+            fits.PrimaryHDU(data=arr, header=wcs.to_header()).writeto(file)
+    with offline_legacy_viewer():
+        hub._enter_project(p)
+    w = hub.workspace
+    assert w is not None
+    assert w.bricks.rowCount() == 0
+    assert w.science_qa.dataset_audit.isEnabled()
+    w.science_qa.dataset_audit.click()
+    qtbot.waitUntil(
+        lambda: w.thread is None and
+        "Dataset integrity audit saved" in w.message.text(), timeout=25000)
+    text = w.science_qa.result.toPlainText()
+    assert "Local datasets: 1; FITS/WCS validated: 1" in text
+    assert "DIAGNOSTIC_NOT_ADOPTED" in text
+    receipts = list(p.root.glob("dataset-audits/*/audit.json"))
+    assert len(receipts) == 1
+    payload = json.loads(receipts[0].read_text("utf-8"))
+    assert payload["project_id"] == p.project_id
+    assert payload["counts"]["validated"] == 1
+    assert payload["multi_brick_groups"][0]["region"] == "south"
+    assert not list(data.rglob("audit.json"))
+    w._go_back_to_projects()
+    assert hub.workspace is None
