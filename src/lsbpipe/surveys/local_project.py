@@ -223,6 +223,52 @@ def open_local_project(directory: str | Path, *,
     last_science = saved.get("last_science", {})
     if not isinstance(last_science, dict):
         last_science = {}
+    if not last_science and selected is not None:
+        # Import older QA runs created before local-project persistence existed.
+        # Use only verified *metadata identity* for navigation, never claim
+        # these historic artifacts' original-FITS hashes were revalidated.
+        qa_dir = data_root.parent / "qa-runs"
+        artifact_names = {
+            "square": "square.json", "census": "mask-census.json",
+            "masks": "mask-components.json", "figure": "four-layers.png",
+            "compare": "north-south.json",
+        }
+        if qa_dir.is_dir():
+            for folder in sorted(qa_dir.iterdir(), reverse=True):
+                if not folder.is_dir() or folder.name.startswith("."):
+                    continue
+                receipt_path = folder / "manifest.json"
+                if not receipt_path.is_file():
+                    continue
+                try:
+                    receipt = _read_metadata(receipt_path)
+                except ValueError:
+                    continue
+                if receipt.get("schema") != "lsbpipe.gui-science-qa/1":
+                    continue
+                context = receipt.get("context", {})
+                action = context.get("action")
+                artifact = artifact_names.get(action)
+                if not artifact or not (folder / artifact).is_file():
+                    continue
+                if not all(context.get(k) == v for k, v in (
+                        ("release", selected[0]), ("region", selected[1]),
+                        ("brick", selected[2]), ("band", selected[3]))):
+                    continue
+                if not all(abs(float(context.get(k, -999)) - v) < 1e-9
+                           for k, v in (
+                               ("ra_deg", field.ra_deg),
+                               ("dec_deg", field.dec_deg),
+                               ("width_arcmin", field.width_arcmin))):
+                    continue
+                last_science = {
+                    "action": action, "path": str(folder / artifact),
+                    "manifest_path": str(receipt_path),
+                    "summary": "Previously saved QA artifact (input hashes not "
+                               "revalidated on reopen)",
+                    "provenance": list(selected),
+                }
+                break
     return LocalProject(
         root=project_root, data_root=data_root, field=field,
         hits=hits, complete=complete, on_disk=on_disk, selected=selected,
