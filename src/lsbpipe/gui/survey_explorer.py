@@ -1795,6 +1795,21 @@ class SurveyExplorer(QMainWindow):
                 "summary": "\n".join(lines), "path": str(path),
                 "manifest_path": str(path), "is_figure": False,
             })
+            if project is not None:
+                from lsbpipe.surveys.object_projects import save_object_project
+                project.last_dataset_audit = {
+                    "relative_path": path.relative_to(project.root).as_posix(),
+                    "data_root": str(directory),
+                    "created_utc": report["created_utc"],
+                    "validated": validated,
+                    "total": total,
+                    "science_status": "DIAGNOSTIC_NOT_ADOPTED",
+                }
+                try:
+                    save_object_project(project)
+                except (ValueError, OSError) as exc:
+                    self.project_status.setText(
+                        f"Dataset audit saved but project index update failed: {exc}")
             self.message.setText(
                 f"Dataset integrity audit saved: {path}")
             self.project_status.setText(
