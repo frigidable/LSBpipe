@@ -1718,12 +1718,107 @@ class SurveyExplorer(QMainWindow):
             width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.qa_image.setPixmap(display)
 
+    def _start_dataset_audit(self):
+        """Standalone offline inspection: no selected brick is required."""
+        from lsbpipe.surveys.dataset_integrity import (
+            audit_dataset_root, save_dataset_audit)
+        raw = self.science_qa.directory.text().strip()
+        if not raw:
+            QMessageBox.warning(
+                self, "No original FITS folder",
+                "Select the directory containing your Legacy FITS data.")
+            return
+        directory = Path(raw).expanduser().resolve()
+        if directory.name != "data" and (directory / "data").is_dir():
+            directory = directory / "data"
+        project = self._object_project
+        output_root = (project.root if project else
+                       self._local_project.root if self._local_project else
+                       directory.parent if directory.name == "data" else directory)
+        project_id = project.project_id if project is not None else None
+        try:
+            # Draft targets may inspect the dataset inventory without a
+            # footprint; half-edited positions must never be interpreted as
+            # an adopted ICRS center.
+            field = self._field() if (
+                self.ra.text().strip() and self.dec.text().strip()) else None
+            if bool(self.ra.text().strip()) != bool(self.dec.text().strip()):
+                raise ValueError("Enter both RA and Dec for sky footprint")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid ICRS field", str(exc))
+            return
+        ticket = self._qa_generation
+        self.inspector_tabs.setCurrentWidget(self.science_qa)
+        self.science_qa.clear_result()
+        self.science_qa.mark_running("dataset_audit")
+        self.science_qa.result.setPlainText(
+            "Verifying native FITS HDUs/WCS and sampled multi-brick sky coverage…"
+            "\nOriginals remain read-only. No archive requests.")
+        self.message.setText("Auditing local FITS datasets…")
+
+        def work(progress):
+            report = audit_dataset_root(
+                directory, field=field, pitch_arcsec=2.,
+                progress=progress)
+            path = save_dataset_audit(
+                report, output_root, project_id=project_id)
+            return report, path
+
+        def finished(data):
+            report, path = data
+            if (ticket != self._qa_generation or
+                    Path(self.science_qa.directory.text().strip()).expanduser().resolve()
+                    not in (directory, directory.parent) or
+                    self._object_project is not project):
+                self.message.setText(
+                    "Dataset audit completed for an older project selection; "
+                    "saved receipt not displayed.")
+                return
+            validated = report["counts"]["validated"]
+            total = report["counts"]["total"]
+            groups = report["multi_brick_groups"]
+            lines = [
+                f"Local datasets: {total}; FITS/WCS validated: {validated}.",
+                f"Missing, incomplete or invalid: "
+                f"{report['counts']['incomplete_or_invalid']}.",
+                "All outcomes are DIAGNOSTIC_NOT_ADOPTED.",
+                "North and South remain separate data families.",
+            ]
+            for g in groups:
+                lines.append(
+                    f"{g['release'].upper()} {g['region']} {g['band']}: "
+                    f"{100*g['geometric_sample_fraction']:.2f}% geometrically "
+                    f"sampled; {100*g['instrumentally_usable_sample_fraction']:.2f}% "
+                    f"instrumentally usable; {g['overlapping_geometric_samples']} "
+                    "overlapping sampled cells.")
+            self.science_qa.show_result({
+                "summary": "\n".join(lines), "path": str(path),
+                "manifest_path": str(path), "is_figure": False,
+            })
+            self.message.setText(
+                f"Dataset integrity audit saved: {path}")
+            self.project_status.setText(
+                f"FITS audit: {validated}/{total} quartets validated, "
+                "not scientifically adopted.")
+
+        self._start(
+            work, finished,
+            on_error=lambda msg: self.science_qa.show_error(msg)
+            if ticket == self._qa_generation else None)
+
     def start_science_qa(self, action: str):
         """Run an existing original-FITS scientific validator in a worker.
 
         No network calls; context is frozen before QThread starts. A stale
         target/brick selection can never be silently analyzed as new data.
         """
+        if action == "dataset_audit":
+            if self.thread is not None:
+                QMessageBox.information(
+                    self, "Busy", "Another survey operation is running.")
+                return
+            self._start_dataset_audit()
+            return
         if self.thread is not None:
             QMessageBox.information(
                 self, "Busy", "Another survey operation is running.")
