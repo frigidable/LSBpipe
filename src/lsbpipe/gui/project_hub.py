@@ -294,8 +294,11 @@ class ProjectHub(QMainWindow):
 
     def _selection_changed(self):
         item = self.projects.currentItem()
-        self.continue_btn.setEnabled(bool(
-            item and not item.isHidden() and item.data(Qt.UserRole)["available"]))
+        available = bool(item and not item.isHidden())
+        self.continue_btn.setEnabled(available)
+        self.continue_btn.setText(
+            "Relink selected…" if available and
+            not item.data(Qt.UserRole)["available"] else "Continue selected")
 
     def _new_project(self):
         dialog = CreateProjectDialog(self)
