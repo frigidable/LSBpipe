@@ -742,3 +742,60 @@ def test_science_workflow_groups_inspect_masks_and_dr9_comparison(
     assert qa.steps.itemText(0) == qa._step_names[0]
     assert qa.steps.itemText(2) == qa._step_names[2]
     assert not qa.open_report.isEnabled()
+
+
+def test_real_worker_completion_updates_widgets_only_in_gui_thread(
+        offline_explorer, qtbot):
+    """Regression: direct Python completion closures previously ran in QThread."""
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+    w = offline_explorer
+    observed = []
+    def task(progress):
+        observed.append(("work", QThread.currentThread() == QApplication.instance().thread()))
+        progress(("demo", "progress"))
+        return "scientific-result"
+    def done(value):
+        assert value == "scientific-result"
+        observed.append(("done", QThread.currentThread() == QApplication.instance().thread()))
+        w.science_qa.result.setPlainText(value)
+    def progress(value):
+        observed.append(("progress", QThread.currentThread() == QApplication.instance().thread()))
+    original_progress = w._progress
+    w._progress = progress
+    try:
+        w._start(task, done)
+        qtbot.waitUntil(lambda: w.thread is None and any(
+            kind == "done" for kind, _ in observed), timeout=12000)
+    finally:
+        w._progress = original_progress
+    assert ("work", False) in observed
+    assert ("done", True) in observed
+    assert ("progress", True) in observed
+    assert w.science_qa.result.toPlainText() == "scientific-result"
+
+
+def test_real_worker_failure_dialog_and_error_state_run_in_gui_thread(
+        offline_explorer, qtbot):
+    from unittest.mock import patch
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+    w = offline_explorer
+    errors = []
+    dialog_threads = []
+    def task(progress):
+        raise RuntimeError("Synthetic numerical failure")
+    def error(message):
+        errors.append((message, QThread.currentThread() == QApplication.instance().thread()))
+        w.science_qa.show_error(message)
+    def mock_dialog(parent, title, message):
+        dialog_threads.append(QThread.currentThread() == QApplication.instance().thread())
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.warning",
+               side_effect=mock_dialog):
+        w._start(task, lambda _: None, on_error=error)
+        qtbot.waitUntil(
+            lambda: w.thread is None and bool(errors) and bool(dialog_threads),
+            timeout=12000)
+    assert errors == [("RuntimeError: Synthetic numerical failure", True)]
+    assert dialog_threads == [True]
+    assert "Synthetic numerical failure" in w.science_qa.result.toPlainText()
