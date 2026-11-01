@@ -168,3 +168,25 @@ def test_audit_limits_fail_closed_and_no_network(tmp_path, monkeypatch):
         audit_dataset_root(root, max_datasets=0)
     with pytest.raises(ValueError, match="Sample pitch"):
         audit_dataset_root(root, field=FIELD, pitch_arcsec=0)
+
+
+
+def test_verified_source_changed_during_audit_fails_closed(tmp_path, monkeypatch):
+    from lsbpipe.surveys import dataset_integrity as audit
+    root = tmp_path / "data"
+    files = _make_brick(root, "0401p012")
+    original_sample = audit._sampled_footprint
+
+    def concurrent_edit(data_root, verified, field, *, pitch_arcsec):
+        result = original_sample(data_root, verified, field,
+                                 pitch_arcsec=pitch_arcsec)
+        # Simulate an external process changing exactly the same FITS
+        # between earlier verification and final scientific receipt.
+        with files["image"].open("ab") as stream:
+            stream.write(b"changed by another process")
+        return result
+
+    monkeypatch.setattr(audit, "_sampled_footprint", concurrent_edit)
+    with pytest.raises(RuntimeError, match="changed while dataset audit"):
+        audit_dataset_root(root, field=FIELD)
+    assert not list(root.rglob("audit.json"))
