@@ -799,3 +799,113 @@ def test_real_worker_failure_dialog_and_error_state_run_in_gui_thread(
     assert errors == [("RuntimeError: Synthetic numerical failure", True)]
     assert dialog_threads == [True]
     assert "Synthetic numerical failure" in w.science_qa.result.toPlainText()
+
+
+
+def _offline_project_files(root):
+    """Disk-only DR9 North/South quartet, no actual FITS content needed."""
+    import json
+    from lsbpipe.surveys.legacy import BrickHit, product_for
+    data = root / "data"
+    for region in ("north", "south"):
+        hit = BrickHit("dr9", region, "0401p012", 0, 0, 0, 0, {"r": 1})
+        for kind in ("image", "invvar", "nexp", "maskbits"):
+            product = product_for(hit, kind,
+                                  None if kind == "maskbits" else "r")
+            file = data / product.relative_path
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(b"offline existing science file")
+    (data / "download-report.json").write_text(json.dumps({
+        "schema": "lsbpipe.legacy-download-report/0.1",
+        "field": {
+            "ra_deg": 40.096208, "dec_deg": 1.229250,
+            "width_arcmin": 5.0},
+        "results": []}), encoding="utf-8")
+
+
+def test_open_existing_ugc_project_without_archive_calls_and_resume(
+        offline_explorer, qtbot, monkeypatch, tmp_path):
+    from unittest.mock import patch
+    from lsbpipe.surveys.local_project import last_project_directory
+    root = tmp_path / "UGC_2162"
+    _offline_project_files(root)
+    w = offline_explorer
+    assert w.open_project_btn.isEnabled()
+    with patch("lsbpipe.gui.survey_explorer.discover_bricks",
+               side_effect=AssertionError("unexpected network archive search")), \
+         patch.object(w, "show_viewer",
+                      side_effect=AssertionError("unexpected remote viewer")):
+        assert w._open_local_project_folder(root)
+    assert w.ra.value() == pytest.approx(40.096208)
+    assert w.dec.value() == pytest.approx(1.22925)
+    assert w.field_width.value() == pytest.approx(5)
+    assert w.bricks.rowCount() == 2
+    assert w.science_qa._hit is not None
+    assert w.science_qa.current_band() == "r"
+    assert w.science_qa.directory.text() == str(root / "data")
+    assert w.science_qa.buttons["census"].isEnabled()
+    assert w._brick_result_matches_target()
+    assert "2/2 complete" in w.project_status.text()
+    assert not w._brick_overlay_features  # offline: no invented brick shapes
+    assert last_project_directory() == root
+    w.target_radius.setValue(35.)
+    w.sky_inner.setValue(65.)
+    w.sky_outer.setValue(110.)
+    with patch.object(w, "show_viewer",
+                      side_effect=AssertionError("viewer navigation")):
+        w.preview_brick(0, 2)
+    assert "unavailable offline" in w.message.text()
+    w._save_project_state()
+    w.close()
+    with offline_legacy_viewer():
+        restored = SurveyExplorer()
+    qtbot.addWidget(restored)
+    restored.show()
+    assert restored._local_project is not None
+    assert restored.ra.value() == pytest.approx(40.096208)
+    assert restored.science_qa.directory.text() == str(root / "data")
+    assert (restored.target_radius.value(),
+            restored.sky_inner.value(),
+            restored.sky_outer.value()) == (35., 65., 110.)
+    assert restored.bricks.rowCount() == 2
+    assert restored._brick_result_matches_target()
+
+
+def test_missing_coordinates_not_silently_guessed_from_brick(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    from lsbpipe.surveys.legacy import BrickHit, product_for
+    root = tmp_path / "metadata-free-galaxy"
+    hit = BrickHit("dr9", "south", "0401p012", 0, 0, 0, 0, {"r": 1})
+    for kind in ("image", "invvar", "nexp", "maskbits"):
+        item = product_for(hit, kind, None if kind == "maskbits" else "r")
+        file = root / item.relative_path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"native test placeholder")
+    w = offline_explorer
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.warning") as warning:
+        assert not w._open_local_project_folder(root)
+    assert warning.called
+    assert "No saved target coordinates" in warning.call_args.args[2]
+    assert w.bricks.rowCount() == 0
+    # Entering actual coordinates is an explicit user-supplied fallback.
+    w.ra.setText("40.096208")
+    w.dec.setText("1.229250")
+    assert w._open_local_project_folder(root)
+    assert w._local_project.field_source == "explicit_gui_target"
+
+
+def test_local_project_selected_products_need_no_download(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    root = tmp_path / "UGC_2162"
+    _offline_project_files(root)
+    w = offline_explorer
+    assert w._open_local_project_folder(root)
+    selected = w._selected()
+    assert len(selected) == 8
+    assert selected.issubset(w._local_project.on_disk)
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.question",
+               side_effect=AssertionError("should not offer to download")):
+        w.download()
+    assert "No network download was attempted" in w.message.text()
