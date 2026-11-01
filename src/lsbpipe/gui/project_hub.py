@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout,
+    QInputDialog,
     QWidget, QDoubleSpinBox, QApplication,
 )
 
@@ -16,6 +17,8 @@ from lsbpipe.surveys.object_projects import (
     create_object_project, import_object_project, read_object_project,
     recent_projects, relink_object_project, touch_object_project,
 )
+from lsbpipe.surveys.local_project import open_local_project
+from lsbpipe.gui.target_input import parse_coordinate_pair
 from .survey_explorer import SurveyExplorer
 
 
@@ -96,6 +99,7 @@ class CreateProjectDialog(QDialog):
         layout.addWidget(self.pages, 1)
         layout.addLayout(controls)
         self.name.textChanged.connect(self._suggest_directory)
+        self.directory.textEdited.connect(self._note_directory_edit)
         self._update_controls()
 
     def _suggest_directory(self, _=None):
@@ -107,6 +111,9 @@ class CreateProjectDialog(QDialog):
             for ch in value).strip().replace(" ", "_")
         self.directory.setText(str(self.parent_root / safe) if safe else "")
         
+    def _note_directory_edit(self, *_):
+        self._directory_user_edited = True
+
     def _browse(self):
         folder = QFileDialog.getExistingDirectory(
             self, "Choose parent folder", str(self.parent_root))
@@ -213,6 +220,14 @@ class ProjectHub(QMainWindow):
         outer.addWidget(self.filter)
         self.projects = QListWidget()
         self.projects.setObjectName("hub_project_list")
+        self.projects.setWordWrap(True)
+        self.projects.setSpacing(6)
+        self.projects.setStyleSheet(
+            "QListWidget { border: 1px solid palette(mid); "
+            "border-radius: 10px; padding: 7px; } "
+            "QListWidget::item { padding: 6px; border-radius: 6px; } "
+            "QListWidget::item:selected { background: palette(highlight); "
+            "color: palette(highlighted-text); }")
         self.projects.itemDoubleClicked.connect(lambda _: self._open_selected())
         self.projects.itemSelectionChanged.connect(self._selection_changed)
         outer.addWidget(self.projects, 1)
@@ -237,7 +252,24 @@ class ProjectHub(QMainWindow):
             exists = bool(record["available"])
             name = record.get("display_name") or "Unnamed"
             state = "On disk" if exists else "Missing · relink required"
-            item = QListWidgetItem(f"{name}    ·    {state}\n{record['root']}")
+            detail = ""
+            if exists:
+                try:
+                    entry = read_object_project(record["root"])
+                    pos = (f"{entry.field.ra_deg:.6f}°, "
+                           f"{entry.field.dec_deg:+.6f}°"
+                           if entry.field is not None else "Coordinates not set")
+                    dataset = (
+                        f" · {entry.selected_dataset[0].upper()} "
+                        f"{entry.selected_dataset[1]} "
+                        f"{entry.selected_dataset[3]}-band"
+                        if entry.selected_dataset else "")
+                    detail = f"{pos}{dataset}"
+                except (OSError, ValueError, KeyError, TypeError):
+                    detail = "Manifest requires repair"
+            item = QListWidgetItem(
+                f"{name}   ·   {state}\n{detail}\n{record['root']}")
+            item.setSizeHint(QSize(100, 78))
             item.setData(Qt.UserRole, record)
             item.setToolTip(record["root"])
             self.projects.addItem(item)
@@ -267,7 +299,52 @@ class ProjectHub(QMainWindow):
             self, "Import existing LSBpipe or Legacy FITS folder",
             str(Path.home()))
         if directory:
-            self.import_folder(directory)
+            try:
+                root = Path(directory).expanduser().resolve()
+                manifest = root / "lsbpipe-object.json"
+                if manifest.is_file():
+                    project = read_object_project(root)
+                    description = (
+                        f"Existing project: {project.display_name}\n"
+                        f"Identifier: {project.project_id}\n"
+                        f"Directory: {root}\n\n"
+                        "Open this project without downloading FITS?")
+                else:
+                    preview = open_local_project(root)
+                    complete = sum(preview.complete.values())
+                    description = (
+                        f"Existing local data: {preview.root}\n"
+                        f"Target RA {preview.field.ra_deg:.6f}°, "
+                        f"Dec {preview.field.dec_deg:+.6f}°\n"
+                        f"Bricks: {len(preview.hits)}; "
+                        f"complete band quartets: "
+                        f"{complete}/{len(preview.complete)}\n\n"
+                        "Create an object-project identity beside the "
+                        "existing FITS? No originals will be changed.")
+                if QMessageBox.question(
+                        self, "Review local project import", description,
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No) == QMessageBox.Yes:
+                    self.import_folder(root)
+            except (OSError, ValueError, KeyError) as exc:
+                # A metadata-free legacy folder cannot imply an ICRS center.
+                # Ask explicitly instead of inventing a coordinate from brick.
+                if "No saved target coordinates" not in str(exc):
+                    QMessageBox.warning(
+                        self, "Cannot inspect local folder", str(exc))
+                    return
+                pair, ok = QInputDialog.getText(
+                    self, "Missing target position",
+                    "Enter ICRS RA and Dec (degrees or sexagesimal):")
+                if not ok:
+                    return
+                try:
+                    ra, dec = parse_coordinate_pair(pair)
+                    fallback = SkyField(ra, dec, 5.)
+                except ValueError as invalid:
+                    QMessageBox.warning(self, "Invalid ICRS position", str(invalid))
+                    return
+                self.import_folder(root, fallback_field=fallback)
 
     def import_folder(self, directory: str | Path, *,
                       fallback_field: SkyField | None = None) -> bool:
@@ -304,11 +381,22 @@ class ProjectHub(QMainWindow):
     def _enter_project(self, project):
         if self.workspace is not None:
             return
-        touch_object_project(project)
-        self.workspace = SurveyExplorer(restore_session=False, launch_remote=False)
-        self.workspace.attach_object_project(project)
-        self.workspace.returnToProjects.connect(self._return_from_workspace)
-        self.workspace.show()
+        try:
+            touch_object_project(project)
+            workspace = SurveyExplorer(
+                restore_session=False, launch_remote=False)
+            workspace.attach_object_project(project)
+        except (OSError, ValueError, KeyError, RuntimeError) as exc:
+            if "workspace" in locals():
+                workspace.close()
+                workspace.deleteLater()
+            self.hint.setText(f"Could not open workspace: {exc}")
+            QMessageBox.warning(
+                self, "Cannot open galaxy workspace", str(exc))
+            return
+        self.workspace = workspace
+        workspace.returnToProjects.connect(self._return_from_workspace)
+        workspace.show()
         self.hide()
         self.projectOpened.emit(project.project_id)
 
