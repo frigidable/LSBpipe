@@ -159,3 +159,22 @@ def test_reject_path_traversal_in_saved_data_root(tmp_path):
     file.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="Unsafe"):
         read_object_project(p.root)
+
+
+def test_last_project_from_older_lsbpipe_is_visible_without_mutation(tmp_path):
+    from lsbpipe.surveys.local_project import remember_project_directory
+    root = tmp_path / "UGC_2162"
+    data = _old_folder(root)
+    remember_project_directory(root)
+    rows = recent_projects()
+    assert len(rows) == 1
+    assert rows[0]["legacy"] is True
+    assert rows[0]["display_name"] == "UGC_2162"
+    assert rows[0]["available"] is True
+    assert not (root / PROJECT_FILENAME).exists()
+    project = import_object_project(root)
+    updated = recent_projects()
+    assert len(updated) == 1
+    assert updated[0]["project_id"] == project.project_id
+    assert not updated[0].get("legacy", False)
+    assert all(p.is_file() for p in data.rglob("*.fits.fz"))
