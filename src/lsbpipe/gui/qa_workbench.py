@@ -70,6 +70,16 @@ class ScienceQAControls(QWidget):
         self.directory.setToolTip(
             "Choose the folder that contains dr9/.../coadd, or its pilot "
             "parent containing a data/ subfolder. FITS are never modified.")
+        self.dataset_audit = QPushButton("Audit all local datasets & footprint")
+        self.dataset_audit.setObjectName("science_action_dataset_audit")
+        self.dataset_audit.setToolTip(
+            "Read-only, offline IMAGE/INVVAR/NEXP/MASKBITS integrity and "
+            "WCS validation. Sample shared TAN sky coverage across different "
+            "bricks, keeping North/South and bands separate. Saves an "
+            "immutable dataset-audit record outside the original FITS.")
+        self.dataset_audit.clicked.connect(
+            lambda: self.requested.emit("dataset_audit"))
+        layout.addWidget(self.dataset_audit)
 
         # Progressive scientific workflow: keep source provenance above,
         # and keep the diagnostics/result below, without mixing the paired
@@ -83,7 +93,7 @@ class ScienceQAControls(QWidget):
         )
         self._active_step = None
         self._step_for_action = {
-            "square": 0, "explore": 0, "figure": 0,
+            "dataset_audit": 0, "square": 0, "explore": 0, "figure": 0,
             "census": 1, "masks": 1, "compare": 2,
         }
         self.buttons = {}
@@ -149,6 +159,7 @@ class ScienceQAControls(QWidget):
         layout.addWidget(self.steps)
         for entry in (self.directory, self.north_directory, self.south_directory):
             entry.textChanged.connect(self._context_edited)
+        self.directory.textChanged.connect(self._update_enabled)
 
         layout.addWidget(QLabel("Latest diagnostic"))
         self.result = QPlainTextEdit()
@@ -264,6 +275,8 @@ class ScienceQAControls(QWidget):
         self._update_enabled()
 
     def _update_enabled(self):
+        self.dataset_audit.setEnabled(
+            not self._busy and bool(self.directory.text().strip()))
         for name, button in self.buttons.items():
             button.setEnabled(
                 not self._busy and self._hit is not None and
