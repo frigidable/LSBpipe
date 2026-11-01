@@ -85,6 +85,7 @@ class ObjectProject:
     last_opened_at: str = dc_field(default_factory=_now)
     last_science: dict = dc_field(default_factory=dict)
     catalog_match: dict | None = None
+    last_dataset_audit: dict = dc_field(default_factory=dict)
     target_radius_arcsec: float = 60.
     sky_inner_arcsec: float = 90.
     sky_outer_arcsec: float = 180.
@@ -113,6 +114,8 @@ def _validate(project: ObjectProject) -> None:
     if project.catalog_match is not None and not isinstance(
             project.catalog_match, dict):
         raise ValueError("Invalid external catalog association")
+    if not isinstance(project.last_dataset_audit, dict):
+        raise ValueError("Invalid dataset audit index")
     if not all(math.isfinite(v) for v in (
             project.target_radius_arcsec, project.sky_inner_arcsec,
             project.sky_outer_arcsec)) or not (
@@ -161,6 +164,7 @@ def save_object_project(project: ObjectProject) -> Path:
         "last_opened_at": project.last_opened_at,
         "last_science": project.last_science,
         "catalog_match": project.catalog_match,
+        "last_dataset_audit": project.last_dataset_audit,
         "target_radius_arcsec": project.target_radius_arcsec,
         "sky_inner_arcsec": project.sky_inner_arcsec,
         "sky_outer_arcsec": project.sky_outer_arcsec,
@@ -202,6 +206,7 @@ def read_object_project(root: str | Path) -> ObjectProject:
         last_opened_at=str(info.get("last_opened_at", "")),
         last_science=info.get("last_science") or {},
         catalog_match=info.get("catalog_match"),
+        last_dataset_audit=info.get("last_dataset_audit") or {},
         target_radius_arcsec=float(info.get("target_radius_arcsec", 60.)),
         sky_inner_arcsec=float(info.get("sky_inner_arcsec", 90.)),
         sky_outer_arcsec=float(info.get("sky_outer_arcsec", 180.)))
