@@ -26,8 +26,11 @@ physics or the bytes of original FITS.
   prefers the new passport. This prevents a formerly imported project
   from reverting after independent center adjustments.
 - The chosen dataset is honored when available in local inventory. If
-  it is missing, the inventory can show a present fallback candidate;
-  the program must never silently take a contradictory old selection.
+  it is missing, the inventory may display a present candidate, but **no
+  row is selected** until the user explicitly chooses one. The old saved
+  selection remains in the object passport until then, and QA is blocked
+  by absence of an active brick selection. It must never silently take
+  a contradictory legacy key or adopt an arbitrary alternative.
 - Reselection after an archive download uses the active object position
   rather than importing the old 0.1 target from disk.
 - If both ICRS fields are intentionally blank, a draft can persist
