@@ -598,7 +598,7 @@ class SurveyExplorer(QMainWindow):
             if any(_candidate_images(project.data_root)):
                 # Legacy inventory and QA history remain the canonical
                 # evidence for existing science FITS.
-                self._open_local_project_folder(project.root)
+                self._open_local_project_folder(project.data_root)
                 return
         self._restoring_local_project = True
         try:
@@ -1506,6 +1506,7 @@ class SurveyExplorer(QMainWindow):
         directory = QFileDialog.getExistingDirectory(
             self, "Choose the science data directory",
             str(self._local_project.data_root if self._local_project
+                else self._object_project.root if self._object_project
                 else Path.home()))
         if not directory:
             return
