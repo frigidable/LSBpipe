@@ -572,6 +572,183 @@ class SurveyExplorer(QMainWindow):
         if last_project_directory() is None:
             self.show_viewer()
 
+    def _open_project_dialog(self):
+        initial = (last_project_directory() or
+                   Path(self.science_qa.directory.text().strip() or Path.home()))
+        directory = QFileDialog.getExistingDirectory(
+            self, "Open existing Legacy FITS project", str(initial))
+        if directory:
+            self._open_local_project_folder(directory)
+
+    def _open_local_project_folder(self, directory, *, startup=False):
+        """Import existing science files without any archive HTTP request."""
+        try:
+            fallback = (self._field() if self._manual_target_edited
+                        and not startup else None)
+            project = open_local_project(directory, fallback_field=fallback)
+        except (OSError, ValueError, KeyError) as exc:
+            self.project_status.setText(f"Cannot open local project: {exc}")
+            if not startup:
+                QMessageBox.warning(self, "Cannot open local FITS project", str(exc))
+            return False
+        self._install_local_project(project)
+        try:
+            save_local_project(project)
+        except (OSError, ValueError) as exc:
+            self.project_status.setText(
+                f"Local files opened, but session could not be saved: {exc}")
+        return True
+
+    def _restore_last_project(self):
+        root = last_project_directory()
+        if root is not None and self._open_local_project_folder(root, startup=True):
+            return
+        if root is not None:
+            self.message.setText(
+                "Previously selected project not found or invalid. "
+                "Choose Open existing FITS project to recover it.")
+            self.show_viewer()
+
+    def _install_local_project(self, project):
+        """Rebuild the existing project and selected QA context from disk."""
+        from lsbpipe.surveys.legacy import build_manifest
+        self._project_save_timer.stop()
+        self._restoring_local_project = True
+        try:
+            self._local_project = project
+            self._manual_target_edited = False
+            for widget, value in (
+                (self.ra, project.field.ra_deg),
+                (self.dec, project.field.dec_deg),
+                (self.field_width, project.field.width_arcmin),
+            ):
+                widget.setValue(value)
+            for release, checkbox in self.release_boxes.items():
+                checkbox.setChecked(
+                    any(hit.release == release for hit in project.hits))
+            self.hits = project.hits
+            self.manifest = build_manifest(project.field, project.hits)
+            # Local filenames do not contain official brick geometry or NEXP.
+            self._brick_overlay_features, self._brick_overlay_keys = [], []
+            self.bricks.blockSignals(True)
+            self.bricks.setRowCount(len(self.hits))
+            for row, hit in enumerate(self.hits):
+                for col, value in enumerate((
+                    hit.release.upper(), hit.region, hit.name, "—/—/—/—"
+                )):
+                    self.bricks.setItem(row, col, QTableWidgetItem(value))
+            self.bricks.clearSelection()
+            self.bricks.blockSignals(False)
+            self._fill_brick_filters()
+            self._fill_files(checked_paths=project.on_disk)
+            for widget, value in (
+                (self.target_radius, project.target_radius_arcsec),
+                (self.sky_inner, project.sky_inner_arcsec),
+                (self.sky_outer, project.sky_outer_arcsec),
+            ):
+                widget.setValue(value)
+            self.science_qa.set_data_root(project.data_root)
+            if any(hit.region == "north" for hit in project.hits):
+                self.science_qa.north_directory.setText(str(project.data_root))
+            if any(hit.region == "south" for hit in project.hits):
+                self.science_qa.south_directory.setText(str(project.data_root))
+            chosen = project.selected
+            row = next(
+                (i for i, hit in enumerate(self.hits) if chosen and
+                 (hit.release, hit.region, hit.name) == chosen[:3]), 0)
+            if self.hits:
+                self.bricks.selectRow(row)
+                if chosen and chosen[3] in self.hits[row].median_exposures:
+                    self.science_qa.band.setCurrentText(chosen[3])
+                hit = self.hits[row]
+                project.selected = (hit.release, hit.region, hit.name,
+                                    self.science_qa.current_band())
+            self._mark_local_files()
+            self.target_hint.setText(
+                f"Local ICRS target from {project.field_source}; no archive search")
+            self.message.setText(
+                f"Restored {project.root.name} from existing original FITS. "
+                "Run Science QA without downloading again.")
+            self.preview_label.setText(
+                "LOCAL PROJECT · offline restored · Remote Viewer not refreshed")
+            self.preview_tabs.setCurrentWidget(self.fits_explorer)
+            self.inspector_tabs.setCurrentWidget(self.science_qa)
+            self.data_drawer.show()
+            self._size_data_drawer()
+            self._restore_prior_qa(project)
+        finally:
+            self._restoring_local_project = False
+
+    def _restore_prior_qa(self, project):
+        item = project.last_science
+        key = project.selected
+        if not key or not item or tuple(item.get("provenance", ())) != key:
+            return
+        path = Path(item.get("path", ""))
+        manifest = Path(item.get("manifest_path", ""))
+        qa_dir = project.data_root.parent / "qa-runs"
+        try:
+            if not (path.is_file() and manifest.is_file() and
+                    path.resolve().is_relative_to(qa_dir.resolve()) and
+                    path.parent == manifest.parent):
+                return
+            record = json.loads(manifest.read_text(encoding="utf-8"))
+            context = record.get("context", {})
+            if record.get("schema") != "lsbpipe.gui-science-qa/1":
+                return
+            if not all(context.get(name) == value for name, value in (
+                    ("release", key[0]), ("region", key[1]),
+                    ("brick", key[2]), ("band", key[3]))):
+                return
+            if not all(abs(float(context.get(name, -999)) - value) < 1e-9
+                       for name, value in (
+                           ("ra_deg", project.field.ra_deg),
+                           ("dec_deg", project.field.dec_deg),
+                           ("width_arcmin", project.field.width_arcmin))):
+                return
+        except (OSError, ValueError, TypeError, KeyError):
+            return
+        self.science_qa.show_result({
+            "summary": item.get("summary", "Earlier QA report") +
+                "\n\nRESTORED HISTORY: original FITS hashes have not been "
+                "revalidated on reopening.",
+            "path": str(path), "manifest_path": str(manifest),
+            "is_figure": path.suffix.lower() == ".png"})
+        self.message.setText(
+            "Previous QA report reopened for inspection only; "
+            "rerun the diagnostic before scientific use.")
+
+    def _queue_project_save(self):
+        if (self._local_project is not None and
+                not self._restoring_local_project and
+                self._brick_result_matches_target()):
+            self._project_save_timer.start()
+
+    def _save_project_state(self):
+        project = self._local_project
+        if project is None or self._restoring_local_project:
+            return
+        if not self._brick_result_matches_target():
+            return
+        directory = self.science_qa.directory.text().strip()
+        if (not directory or Path(directory).resolve() not in (
+                project.root.resolve(), project.data_root.resolve())):
+            return
+        row = self.bricks.currentRow()
+        if not (self.bricks.selectedItems() and 0 <= row < len(self.hits)):
+            return
+        hit = self.hits[row]
+        project.selected = (hit.release, hit.region, hit.name,
+                            self.science_qa.current_band())
+        project.target_radius_arcsec = self.target_radius.value()
+        project.sky_inner_arcsec = self.sky_inner.value()
+        project.sky_outer_arcsec = self.sky_outer.value()
+        try:
+            save_local_project(project)
+        except (OSError, ValueError) as exc:
+            self.project_status.setText(
+                f"Science files remain available; session save failed: {exc}")
+
     def _toggle_data_drawer(self):
         visible = not self.data_drawer.isVisible()
         self.data_drawer.setVisible(visible)
