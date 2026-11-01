@@ -261,6 +261,12 @@ def import_object_project(directory: str | Path, *,
         touch_object_project(project)
         return project
     prior = open_local_project(root, fallback_field=fallback_field)
+    # Importing the data/ child of an already registered project must keep
+    # the existing immutable UUID, not attempt to overwrite its manifest.
+    if project_path(prior.root).is_file():
+        project = read_object_project(prior.root)
+        touch_object_project(project)
+        return project
     # Name is user-editable. Legacy imports use the folder name only as
     # a descriptive default, never as the official galaxy identity.
     project = ObjectProject(
