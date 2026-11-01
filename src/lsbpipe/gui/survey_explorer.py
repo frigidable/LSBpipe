@@ -1655,10 +1655,16 @@ class SurveyExplorer(QMainWindow):
             QMessageBox.warning(self, "Incomplete download",
                 f"{failures} files failed. Inspect download-report.json.")
         if successes and self._last_download_root:
-            # Completed downloads are immediately reusable as a local
-            # project, preserving the target instead of restarting discovery.
-            self._manual_target_edited = True
-            self._open_local_project_folder(self._last_download_root)
+            # A new download may follow an explicit target edit. Persist that
+            # accepted object position *before* reopening its local inventory.
+            # Never let stale 0.1 metadata replace the newly searched target.
+            if self._object_project is not None:
+                self._save_object_project_context()
+                self._open_local_project_folder(
+                    self._last_download_root, from_object=True)
+            else:
+                self._manual_target_edited = True
+                self._open_local_project_folder(self._last_download_root)
 
     def _on_science_context_changed(self, *_):
         self._qa_generation += 1
