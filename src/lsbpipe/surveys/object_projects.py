@@ -17,6 +17,7 @@ import uuid
 from .legacy import SkyField
 from .local_project import (
     _atomic_json, open_local_project, session_pointer_path,
+    last_project_directory,
 )
 
 SCHEMA = "lsbpipe.object-project/1"
@@ -205,13 +206,29 @@ def _registry_rows() -> list[dict]:
 
 
 def recent_projects() -> list[dict]:
-    """Preserve missing-directory entries for explicit relinking in the hub."""
+    """Registry plus a non-mutating legacy last-project migration suggestion."""
     rows = _registry_rows()
+    items = [
+        {**r, "available": project_path(r["root"]).is_file()}
+        for r in rows if isinstance(r, dict) and
+        isinstance(r.get("root"), str) and isinstance(r.get("project_id"), str)
+    ]
+    old = last_project_directory()
+    if old is not None:
+        original = old.parent if old.name == "data" else old
+        old_key = str(original.resolve())
+        if (not project_path(original).is_file() and
+                not any(Path(r["root"]).resolve() == original.resolve()
+                        for r in items)):
+            items.append({
+                "project_id": "legacy:" + old_key,
+                "display_name": original.name, "root": old_key,
+                "last_opened_at": "", "available": True,
+                "legacy": True,
+            })
     return sorted(
-        ({**r, "available": project_path(r["root"]).is_file()}
-         for r in rows if isinstance(r, dict) and
-         isinstance(r.get("root"), str) and isinstance(r.get("project_id"), str)),
-        key=lambda x: x.get("last_opened_at", ""), reverse=True)
+        items, key=lambda x: (x.get("last_opened_at", ""), x.get("legacy", False)),
+        reverse=True)
 
 
 def register_object_project(project: ObjectProject) -> None:
