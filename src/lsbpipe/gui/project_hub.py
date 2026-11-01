@@ -255,16 +255,24 @@ class ProjectHub(QMainWindow):
             detail = ""
             if exists:
                 try:
-                    entry = read_object_project(record["root"])
-                    pos = (f"{entry.field.ra_deg:.6f}°, "
+                    if record.get("legacy"):
+                        prior = open_local_project(record["root"])
+                        detail = (
+                            f"Previous-version project · "
+                            f"{prior.field.ra_deg:.6f}°, "
+                            f"{prior.field.dec_deg:+.6f}° · "
+                            "Import on opening")
+                    else:
+                        entry = read_object_project(record["root"])
+                        pos = (f"{entry.field.ra_deg:.6f}°, "
                            f"{entry.field.dec_deg:+.6f}°"
                            if entry.field is not None else "Coordinates not set")
-                    dataset = (
-                        f" · {entry.selected_dataset[0].upper()} "
-                        f"{entry.selected_dataset[1]} "
-                        f"{entry.selected_dataset[3]}-band"
-                        if entry.selected_dataset else "")
-                    detail = f"{pos}{dataset}"
+                        dataset = (
+                            f" · {entry.selected_dataset[0].upper()} "
+                            f"{entry.selected_dataset[1]} "
+                            f"{entry.selected_dataset[3]}-band"
+                            if entry.selected_dataset else "")
+                        detail = f"{pos}{dataset}"
                 except (OSError, ValueError, KeyError, TypeError):
                     detail = "Manifest requires repair"
             item = QListWidgetItem(
@@ -372,6 +380,9 @@ class ProjectHub(QMainWindow):
                     self._enter_project(project)
                 except (OSError, ValueError) as exc:
                     QMessageBox.warning(self, "Cannot relink project", str(exc))
+            return
+        if row.get("legacy"):
+            self.import_folder(row["root"])
             return
         try:
             self._enter_project(read_object_project(row["root"]))
