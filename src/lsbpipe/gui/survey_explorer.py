@@ -27,6 +27,8 @@ from lsbpipe.surveys.legacy import (
 from lsbpipe.surveys.transfer import probe_product, download_manifest
 from lsbpipe.surveys.viewer import viewer_url, suggested_zoom
 from lsbpipe.surveys.selection import matching_product, summarize_selection
+from lsbpipe.surveys.local_project import (
+    open_local_project, save_local_project, last_project_directory)
 from lsbpipe.surveys.brick_overlay import brick_shapes, installation_script, highlight_script
 from lsbpipe.gui.target_input import (
     parse_ra_deg, parse_dec_deg, parse_width_arcmin, parse_coordinate_pair)
@@ -176,7 +178,15 @@ class SurveyExplorer(QMainWindow):
         self._qa_pixmap = None
         self._qa_generation = 0
         self._last_download_root = None
+        self._local_project = None
+        self._restoring_local_project = False
+        self._manual_target_edited = False
+        self._project_save_timer = QTimer(self)
+        self._project_save_timer.setSingleShot(True)
+        self._project_save_timer.setInterval(250)
+        self._project_save_timer.timeout.connect(self._save_project_state)
         self._build_ui()
+        self._restore_last_project()
 
     def _build_ui(self):
         # Geometry/legibility rules only; retain OS light/dark palette.
@@ -276,6 +286,17 @@ class SurveyExplorer(QMainWindow):
         self.external_btn.clicked.connect(self.open_viewer_in_browser)
         secondary_actions.addWidget(self.external_btn)
         target_form.addLayout(secondary_actions)
+        self.open_project_btn = QPushButton("Open existing FITS project…")
+        self.open_project_btn.setObjectName("open_existing_local_project")
+        self.open_project_btn.setToolTip(
+            "Restore a downloaded Legacy FITS project directly from disk. "
+            "No archive search or network download is required.")
+        self.open_project_btn.clicked.connect(self._open_project_dialog)
+        target_form.addWidget(self.open_project_btn)
+        self.project_status = QLabel("No local project opened")
+        self.project_status.setObjectName("local_project_status")
+        self.project_status.setWordWrap(True)
+        target_form.addWidget(self.project_status)
         panel.addWidget(target_box)
 
         viewer_controls = QHBoxLayout()
@@ -547,7 +568,9 @@ class SurveyExplorer(QMainWindow):
         self.search_btn.setDefault(True)
         # Navigation to a remote web application is deliberately explicit.
         # RA/Dec spinbox edits must not trigger many remote page reloads.
-        self.show_viewer()
+        # Auto-resume does not require contacting the hosted Legacy Viewer.
+        if last_project_directory() is None:
+            self.show_viewer()
 
     def _toggle_data_drawer(self):
         visible = not self.data_drawer.isVisible()
@@ -604,6 +627,9 @@ class SurveyExplorer(QMainWindow):
         return field
 
     def _target_edited(self, *_):
+        if self._restoring_local_project:
+            return
+        self._manual_target_edited = True
         if hasattr(self, "science_qa"):
             self._on_science_context_changed()
         # The existing bricks, if any, describe the previous target field.
@@ -735,6 +761,7 @@ class SurveyExplorer(QMainWindow):
                if self.bricks.selectedItems() and
                   0 <= row < len(self._brick_overlay_keys) else None)
         self._run_brick_js(highlight_script(key))
+        self._queue_project_save()
 
     def _hover_brick_row(self, row, _column):
         key = (self._brick_overlay_keys[row]
@@ -883,6 +910,11 @@ class SurveyExplorer(QMainWindow):
         if not releases:
             QMessageBox.warning(self, "Select a release", "Choose at least one data release.")
             return
+        # Explicit archive search detaches the local-only, offline view.
+        # Previous project metadata and original data remain on disk.
+        self._project_save_timer.stop()
+        self._local_project = None
+        self.project_status.setText("Archive search · no local project selected")
         self.manifest = None
         self.science_qa.set_selected_hit(None)
         self.bricks.setRowCount(0)
@@ -955,6 +987,32 @@ class SurveyExplorer(QMainWindow):
                 item.setToolTip(detail + chr(10) + f"Status: {entry['evidence']}")
                 self.files.setItem(row, col, item)
         self._filter_products()
+        self._mark_local_files()
+
+    def _mark_local_files(self):
+        """Annotate local evidence separately from remote HTTP verification."""
+        project = self._local_project
+        if project is None or self.manifest is None:
+            return
+        for row, entry in enumerate(self.manifest["products"]):
+            path = entry["relative_path"]
+            local = project.data_root / path
+            if path in project.on_disk and local.is_file():
+                mib = local.stat().st_size / 1048576.
+                self.files.item(row, 3).setText(f"{mib:.0f}")
+                self.files.item(row, 3).setToolTip(
+                    f"LOCAL PRESENT · {local} · {mib:.2f} MiB. "
+                    "Existence is not a science/remote integrity check.")
+                name = self.files.item(row, 1)
+                name.setToolTip(name.toolTip() + "\nLOCAL PRESENT (unverified)")
+            else:
+                name = self.files.item(row, 1)
+                name.setToolTip(name.toolTip() + "\nNOT FOUND in active local project")
+        complete = sum(project.complete.values())
+        self.project_status.setText(
+            f"LOCAL · {project.root.name} · {len(project.on_disk)} original "
+            f"products on disk · {complete}/{len(project.complete)} "
+            "complete band quartets (not scientifically verified)")
 
     @staticmethod
     def _short_http_evidence(evidence):
@@ -1268,6 +1326,7 @@ class SurveyExplorer(QMainWindow):
         if hasattr(self, "science_qa"):
             self.science_qa.clear_result()
         self._invalidate_qa_figure()
+        self._queue_project_save()
 
     def _invalidate_qa_figure(self, *_):
         if hasattr(self, "fits_explorer"):
@@ -1489,6 +1548,13 @@ class SurveyExplorer(QMainWindow):
             self.science_qa.clear_result()
             return
         self.science_qa.show_result(result)
+        if self._local_project is not None:
+            self._local_project.last_science = {
+                "action": result["action"], "path": result["path"],
+                "manifest_path": result.get("manifest_path", ""),
+                "summary": result["summary"],
+                "provenance": list(result["provenance"])}
+            self._queue_project_save()
         self.message.setText(
             "Local FITS QA saved (not adopted): " + result["path"])
         if result["is_figure"]:
@@ -1509,6 +1575,8 @@ class SurveyExplorer(QMainWindow):
                                     "Complete the active operation before closing.")
             event.ignore()
         else:
+            self._project_save_timer.stop()
+            self._save_project_state()
             super().closeEvent(event)
 
 
