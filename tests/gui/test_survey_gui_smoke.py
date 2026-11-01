@@ -518,3 +518,394 @@ def test_brick_geometry_does_not_follow_edited_target_as_stale_coverage(offline_
     # unrelated archive brick polygons must not claim to cover it.
     assert len(parse_qs(urlparse(
         w._viewer_link(include_bricks=True)).query)["poly"][0].split(";")) == 1
+
+
+
+def test_science_workbench_is_a_separate_tab_preserving_archive_and_viewer(
+        offline_explorer, qtbot):
+    w = offline_explorer
+    assert w.inspector_tabs.count() == 2
+    assert w.inspector_tabs.tabText(0) == "Archive files"
+    assert w.inspector_tabs.tabText(1) == "Science QA"
+    assert w.preview_tabs.count() == 3
+    assert w.preview_tabs.currentWidget() is w.sky
+    assert w.files.columnCount() == 4
+    assert w.save_btn.isEnabled()
+    assert w.download_btn.isEnabled()
+    assert not w.science_qa.buttons["square"].isEnabled()
+    assert not w.science_qa.buttons["compare"].isEnabled()
+    apply_offline_state(w, "S3")
+    w.inspector_tabs.setCurrentWidget(w.science_qa)
+    qtbot.wait(20)
+    assert w.science_qa.selection_label.text().startswith("DR9 · north")
+    assert w.science_qa.current_band() == "r"
+    assert all(b.isEnabled() for b in w.science_qa.buttons.values())
+    assert w.sky.isVisible()  # local QA analysis does not hide the sky viewer
+
+
+def test_science_qa_uses_selected_brick_and_pasted_target_without_requery(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    folder = tmp_path/"user-pilot"
+    w.science_qa.set_data_root(folder, region="north")
+    assert w.science_qa.directory.text() == str(folder)
+    assert w.science_qa.north_directory.text() == str(folder)
+    evidence = {}
+    def inline(action, finished, on_error=None):
+        evidence["threaded"] = False
+        assert callable(on_error)
+        finished(action(None))
+    with patch.object(w, "_start", side_effect=inline), patch(
+            "lsbpipe.gui.survey_explorer.run_science_qa_backend") as core:
+        core.side_effect = lambda *a, **k: {
+            "action":"square", "status":"DIAGNOSTIC_NOT_ADOPTED",
+            "summary":"Original square: 98% instrumentally usable",
+            "path":str(tmp_path/"qa-reports"/"square.json"),
+            "is_figure":False, "context":k["context"],
+            "provenance":("dr9","north",w.hits[0].name,"r")}
+        w.start_science_qa("square")
+        core.assert_called_once()
+    kws = core.call_args.kwargs
+    assert kws["directory"] == str(folder)
+    assert kws["hit"] == w.hits[0]
+    assert kws["field"] == w._field()
+    assert kws["band"] == "r"
+    assert "98%" in w.science_qa.result.toPlainText()
+    assert w.science_qa.open_report.isEnabled()
+    assert w.preview_tabs.currentWidget() is w.sky
+
+
+def test_science_qa_never_analyzes_stale_archive_selection(
+        offline_explorer):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.science_qa.directory.setText("Z:/old-data")
+    w.ra.setText("40.096208")
+    with patch("lsbpipe.gui.survey_explorer.run_science_qa_backend") as core, \
+         patch("lsbpipe.gui.survey_explorer.QMessageBox.warning") as warning:
+        w.start_science_qa("square")
+    warning.assert_called_once()
+    core.assert_not_called()
+
+
+def test_local_original_fits_map_opens_in_central_preview_tab(
+        offline_explorer, tmp_path, qtbot):
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtCore import Qt
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    image = tmp_path/"QA_figure.png"
+    pix = QPixmap(200,100)
+    pix.fill(Qt.white)
+    assert pix.save(str(image), "PNG")
+    w._science_qa_ready({
+        "action":"figure", "status":"DIAGNOSTIC_NOT_ADOPTED",
+        "summary":"IMAGE / INVVAR / NEXP / MASKBITS",
+        "path":str(image), "is_figure":True,
+        "provenance":("dr9","north",w.hits[0].name,"r")})
+    qtbot.wait(20)
+    assert w.preview_tabs.currentWidget() is w.qa_image_scroll
+    assert w._qa_pixmap is not None
+    assert w.qa_image.pixmap() is not None
+    assert "LOCAL ORIGINAL FITS" in w.preview_label.text()
+    w.preview_tabs.setCurrentWidget(w.sky)
+    assert "REMOTE PREVIEW" in w.preview_label.text()
+
+
+def test_science_qa_disables_unsafe_paired_comparison_without_two_roots(
+        offline_explorer):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.information") as info, \
+         patch("lsbpipe.gui.survey_explorer.run_science_qa_backend") as core:
+        w.start_science_qa("compare")
+    info.assert_called_once()
+    core.assert_not_called()
+
+
+def test_qa_fields_remain_scrollable_at_laptop_size(offline_explorer, qtbot):
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.resize(1366, 768)
+    w.inspector_tabs.setCurrentWidget(w.science_qa)
+    qtbot.wait(30)
+    assert w.science_qa.width() > 250
+    assert w.science_qa.buttons["square"].isEnabled()
+    assert w.sky.width() >= w.width() * 0.55
+
+
+
+def test_science_run_rejects_changed_radii_even_if_restored(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.science_qa.directory.setText(str(tmp_path/"original-data"))
+    pending = []
+    def defer(action, callback, on_error=None):
+        pending.append((action, callback, on_error))
+    with patch.object(w, "_start", side_effect=defer):
+        w.start_science_qa("square")
+    assert len(pending) == 1
+    snapshot = w._current_science_context("square")
+    assert snapshot is not None
+    previous_ticket = w._qa_generation
+    value = w.target_radius.value()
+    w.target_radius.setValue(value + 1.)
+    w.target_radius.setValue(value)
+    assert w._qa_generation > previous_ticket
+    assert w._current_science_context("square") == snapshot
+    pending[0][1]({
+        "action":"square", "status":"DIAGNOSTIC_NOT_ADOPTED",
+        "summary":"STALE INCORRECT SCIENCE",
+        "path":str(tmp_path/"old.json"), "is_figure":False,
+        "context":snapshot,
+        "provenance":("dr9","north",w.hits[0].name,"r")})
+    assert "STALE" not in w.science_qa.result.toPlainText()
+    assert not w.science_qa.open_report.isEnabled()
+
+
+def test_editing_fits_folder_invalidates_previous_saved_result(
+        offline_explorer, tmp_path):
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.science_qa.show_result({
+        "summary":"Last old aperture", "path":str(tmp_path/"old.json"),
+        "is_figure":False})
+    assert w.science_qa.open_report.isEnabled()
+    ticket = w._qa_generation
+    w.science_qa.directory.setText(str(tmp_path/"new-root"))
+    assert w._qa_generation > ticket
+    assert not w.science_qa.open_report.isEnabled()
+    assert "Last old aperture" not in w.science_qa.result.toPlainText()
+
+
+def test_changing_band_or_north_folder_invalidates_loaded_fits(
+        offline_explorer, tmp_path):
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.fits_explorer._dataset = {"synthetic": True}
+    assert w.fits_explorer._dataset is not None
+    w.science_qa.north_directory.setText(str(tmp_path/"other-north"))
+    assert w.fits_explorer._dataset is None
+    assert not w.science_qa.open_report.isEnabled()
+    w.fits_explorer._dataset = {"synthetic": True}
+    # The synthetic selected brick has r/g/z band inventory.
+    old = w.science_qa.current_band()
+    next_band = "g" if old != "g" else "r"
+    w.science_qa.band.setCurrentText(next_band)
+    assert w.fits_explorer._dataset is None
+
+
+
+def test_science_workflow_groups_inspect_masks_and_dr9_comparison(
+        offline_explorer, qtbot):
+    w = offline_explorer
+    apply_offline_state(w, "S3")
+    w.inspector_tabs.setCurrentWidget(w.science_qa)
+    qa = w.science_qa
+    assert qa.steps.count() == 3
+    assert qa.steps.currentIndex() == 0
+    assert qa.buttons["square"].isVisible()
+    assert qa.buttons["explore"].isVisible()
+    assert not qa.buttons["compare"].isVisible()
+    assert qa.selection_label.text().startswith("DR9 · north")
+    qa.steps.setCurrentIndex(1)
+    assert qa.buttons["census"].isVisible()
+    assert qa.buttons["masks"].isVisible()
+    assert not qa.buttons["square"].isVisible()
+    assert qa._step_for_action["census"] == 1
+    qa.mark_running("census")
+    assert "Running" in qa.steps.itemText(1)
+    qa.show_error("Synthetic no-pixel scope")
+    assert "Failed" in qa.steps.itemText(1)
+    qa.steps.setCurrentIndex(2)
+    assert qa.buttons["compare"].isVisible()
+    assert qa.north_directory.isVisible()
+    assert qa.south_directory.isVisible()
+    qa.mark_running("compare")
+    assert "Running" in qa.steps.itemText(2)
+    qa.show_error("Synthetic WCS mismatch")
+    assert "Failed" in qa.steps.itemText(2)
+    assert "Synthetic WCS mismatch" in qa.result.toPlainText()
+    qa.mark_running("square")
+    assert qa.steps.currentIndex() == 0
+    qa.show_result({
+        "summary":"Synthetic coverage", "path":"C:/mock/report.json",
+        "is_figure":False, "run_id":"MOCK-DO-NOT-ADOPT"})
+    assert "Diagnostic saved" in qa.steps.itemText(0)
+    qa.directory.setText("C:/another-folder")
+    assert qa.steps.itemText(0) == qa._step_names[0]
+    assert qa.steps.itemText(2) == qa._step_names[2]
+    assert not qa.open_report.isEnabled()
+
+
+def test_real_worker_completion_updates_widgets_only_in_gui_thread(
+        offline_explorer, qtbot):
+    """Regression: direct Python completion closures previously ran in QThread."""
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+    w = offline_explorer
+    observed = []
+    def task(progress):
+        observed.append(("work", QThread.currentThread() == QApplication.instance().thread()))
+        progress(("demo", "progress"))
+        return "scientific-result"
+    def done(value):
+        assert value == "scientific-result"
+        observed.append(("done", QThread.currentThread() == QApplication.instance().thread()))
+        w.science_qa.result.setPlainText(value)
+    def progress(value):
+        observed.append(("progress", QThread.currentThread() == QApplication.instance().thread()))
+    original_progress = w._progress
+    w._progress = progress
+    try:
+        w._start(task, done)
+        qtbot.waitUntil(lambda: w.thread is None and any(
+            kind == "done" for kind, _ in observed), timeout=12000)
+    finally:
+        w._progress = original_progress
+    assert ("work", False) in observed
+    assert ("done", True) in observed
+    assert ("progress", True) in observed
+    assert w.science_qa.result.toPlainText() == "scientific-result"
+
+
+def test_real_worker_failure_dialog_and_error_state_run_in_gui_thread(
+        offline_explorer, qtbot):
+    from unittest.mock import patch
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+    w = offline_explorer
+    errors = []
+    dialog_threads = []
+    def task(progress):
+        raise RuntimeError("Synthetic numerical failure")
+    def error(message):
+        errors.append((message, QThread.currentThread() == QApplication.instance().thread()))
+        w.science_qa.show_error(message)
+    def mock_dialog(parent, title, message):
+        dialog_threads.append(QThread.currentThread() == QApplication.instance().thread())
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.warning",
+               side_effect=mock_dialog):
+        w._start(task, lambda _: None, on_error=error)
+        qtbot.waitUntil(
+            lambda: w.thread is None and bool(errors) and bool(dialog_threads),
+            timeout=12000)
+    assert errors == [("RuntimeError: Synthetic numerical failure", True)]
+    assert dialog_threads == [True]
+    assert "Synthetic numerical failure" in w.science_qa.result.toPlainText()
+
+
+
+def _offline_project_files(root):
+    """Disk-only DR9 North/South quartet, no actual FITS content needed."""
+    import json
+    from lsbpipe.surveys.legacy import BrickHit, product_for
+    data = root / "data"
+    for region in ("north", "south"):
+        hit = BrickHit("dr9", region, "0401p012", 0, 0, 0, 0, {"r": 1})
+        for kind in ("image", "invvar", "nexp", "maskbits"):
+            product = product_for(hit, kind,
+                                  None if kind == "maskbits" else "r")
+            file = data / product.relative_path
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(b"offline existing science file")
+    (data / "download-report.json").write_text(json.dumps({
+        "schema": "lsbpipe.legacy-download-report/0.1",
+        "field": {
+            "ra_deg": 40.096208, "dec_deg": 1.229250,
+            "width_arcmin": 5.0},
+        "results": []}), encoding="utf-8")
+
+
+def test_open_existing_ugc_project_without_archive_calls_and_resume(
+        offline_explorer, qtbot, monkeypatch, tmp_path):
+    from unittest.mock import patch
+    from lsbpipe.surveys.local_project import last_project_directory
+    root = tmp_path / "UGC_2162"
+    _offline_project_files(root)
+    w = offline_explorer
+    assert w.open_project_btn.isEnabled()
+    with patch("lsbpipe.gui.survey_explorer.discover_bricks",
+               side_effect=AssertionError("unexpected network archive search")), \
+         patch.object(w, "show_viewer",
+                      side_effect=AssertionError("unexpected remote viewer")):
+        assert w._open_local_project_folder(root)
+    assert w.ra.value() == pytest.approx(40.096208)
+    assert w.dec.value() == pytest.approx(1.22925)
+    assert w.field_width.value() == pytest.approx(5)
+    assert w.bricks.rowCount() == 2
+    assert w.science_qa._hit is not None
+    assert w.science_qa.current_band() == "r"
+    assert w.science_qa.directory.text() == str(root / "data")
+    assert w.science_qa.buttons["census"].isEnabled()
+    assert w._brick_result_matches_target()
+    assert "2/2 complete" in w.project_status.text()
+    assert not w._brick_overlay_features  # offline: no invented brick shapes
+    assert last_project_directory() == root
+    w.target_radius.setValue(35.)
+    w.sky_inner.setValue(65.)
+    w.sky_outer.setValue(110.)
+    with patch.object(w, "show_viewer",
+                      side_effect=AssertionError("viewer navigation")):
+        w.preview_brick(0, 2)
+    assert "unavailable offline" in w.message.text()
+    w._save_project_state()
+    w.close()
+    with offline_legacy_viewer():
+        restored = SurveyExplorer()
+    qtbot.addWidget(restored)
+    restored.show()
+    assert restored._local_project is not None
+    assert restored.ra.value() == pytest.approx(40.096208)
+    assert restored.science_qa.directory.text() == str(root / "data")
+    assert (restored.target_radius.value(),
+            restored.sky_inner.value(),
+            restored.sky_outer.value()) == (35., 65., 110.)
+    assert restored.bricks.rowCount() == 2
+    assert restored._brick_result_matches_target()
+
+
+def test_missing_coordinates_not_silently_guessed_from_brick(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    from lsbpipe.surveys.legacy import BrickHit, product_for
+    root = tmp_path / "metadata-free-galaxy"
+    hit = BrickHit("dr9", "south", "0401p012", 0, 0, 0, 0, {"r": 1})
+    for kind in ("image", "invvar", "nexp", "maskbits"):
+        item = product_for(hit, kind, None if kind == "maskbits" else "r")
+        file = root / item.relative_path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"native test placeholder")
+    w = offline_explorer
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.warning") as warning:
+        assert not w._open_local_project_folder(root)
+    assert warning.called
+    assert "No saved target coordinates" in warning.call_args.args[2]
+    assert w.bricks.rowCount() == 0
+    # Entering actual coordinates is an explicit user-supplied fallback.
+    w.ra.setText("40.096208")
+    w.dec.setText("1.229250")
+    assert w._open_local_project_folder(root)
+    assert w._local_project.field_source == "explicit_gui_target"
+
+
+def test_local_project_selected_products_need_no_download(
+        offline_explorer, tmp_path):
+    from unittest.mock import patch
+    root = tmp_path / "UGC_2162"
+    _offline_project_files(root)
+    w = offline_explorer
+    assert w._open_local_project_folder(root)
+    selected = w._selected()
+    assert len(selected) == 8
+    assert selected.issubset(w._local_project.on_disk)
+    with patch("lsbpipe.gui.survey_explorer.QMessageBox.question",
+               side_effect=AssertionError("should not offer to download")):
+        w.download()
+    assert "No network download was attempted" in w.message.text()

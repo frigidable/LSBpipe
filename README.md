@@ -26,6 +26,42 @@ subtraction, or a complete uncertainty model.
 - `scripts/make_mock_legacy_fits.py` generates three genuinely formatted but
   **entirely synthetic** FITS images for an offline integration test.
 
+## Galaxy Project Hub (experimental)
+
+The default GUI opens an offline-first **Project Hub**, not an automatic
+network/Legacy Viewer session:
+
+```powershell
+python -m pip install -e ".[exact,gui,test]"
+python -m lsbpipe.gui
+```
+
+In the hub:
+
+- **New galaxy project** creates a portable scientific workspace even before
+  identifying ICRS coordinates or downloading FITS. Use the 3-step wizard.
+- **Import existing folder…** can recover an already downloaded object project,
+  e.g. `C:\Users\frigi\Documents\PhD\LSBpipeData\UGC_2162`, and its old
+  immutable QA history, without any redownload.
+- **Recent projects** lists previously opened objects and also detects the last
+  project from the older application version as an import suggestion.
+- **Continue selected** opens a project-bound Explorer. **All galaxy projects**
+  returns to the hub; switching is blocked while a worker is active.
+- **Relink selected** reconnects a moved project by exact UUID.
+
+Object identity uses an immutable UUID stored in `lsbpipe-object.json`
+(schema `lsbpipe.object-project/1`). The older
+`lsbpipe-project.json` (`lsbpipe.local-project/0.1`) remains intact for
+rollback and old FITS-session compatibility. A user-local registry stores
+recent project paths, while the object manifest makes projects portable.
+No SIMBAD lookup or archive download occurs during Hub startup or project
+creation. SIMBAD-assisted object identification is a separately planned
+opt-in module, not an active synchronization feature.
+
+See `docs/architecture/OBJECT_CENTRIC_PROJECT_HUB_DESIGN.md` for the
+lifecycle and caveats. Old source FITS remain read-only; no QA output is
+promoted to publication-grade photometry by merely importing a project.
+
 ## Install on Windows / Linux
 
 In the extracted directory, Python 3.10+:

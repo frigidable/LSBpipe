@@ -22,6 +22,8 @@ from PySide6.QtGui import QFont, QFontInfo, QFontDatabase
 from PySide6.QtWidgets import QApplication, QGroupBox, QTableWidget
 
 from lsbpipe.gui.survey_explorer import SurveyExplorer
+from lsbpipe.gui.project_hub import ProjectHub
+from lsbpipe.surveys.object_projects import create_object_project
 
 
 SIZES = ((1366, 768), (1600, 900), (1920, 1080))
@@ -66,6 +68,8 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
         "coverage_button": window.qa_btn,
         "download_button": window.download_btn,
         "web_viewer_placeholder": window.sky,
+        "science_qa_tab": window.science_qa,
+        "science_qa_result": window.science_qa.result,
     }
     viewer_share = _bounds(splitter.widget(1), window)["width"] / width
     if viewer_share < 0.55:
@@ -73,7 +77,7 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
             f"{state} viewer insufficient at {width}x{height}: "
             f"{viewer_share:.1%} (minimum 55%)")
     visible_table_height = 0
-    if state != "S0":
+    if state not in ("S0", "S4", "S5", "S6"):
         table_bounds = _bounds(window.files, window)
         viewport_bounds = _bounds(window.data_scroll.viewport(), window)
         visible_table_height = max(
@@ -92,6 +96,27 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
             raise AssertionError(
                 f"{state} Download selected action is not reachable "
                 f"within the {width}x{height} window: {primary}")
+    if state in ("S4", "S5", "S6"):
+        if window.inspector_tabs.currentWidget() is not window.science_qa:
+            raise AssertionError("S4 Science QA tab not selected")
+        if not window.science_qa.result.isVisible():
+            raise AssertionError("S4 Science QA result text clipped/hidden")
+        expected = "compare" if state == "S6" else "square"
+        if not window.science_qa.buttons[expected].isVisible():
+            raise AssertionError(
+                f"{state} Science QA action {expected!r} unreachable")
+        if state == "S6" and (
+                not window.science_qa.north_directory.isVisible() or
+                not window.science_qa.south_directory.isVisible()):
+            raise AssertionError(
+                "S6 separate original North/South input fields are hidden")
+    if state == "S5":
+        if window.preview_tabs.currentWidget() is not window.fits_explorer:
+            raise AssertionError("S5 native FITS Explorer is not visible")
+        if not window.fits_explorer.layer.isVisible():
+            raise AssertionError("S5 image-layer control is clipped or hidden")
+        if window.fits_explorer.base_item.pixmap().isNull():
+            raise AssertionError("S5 synthetic image not rendered")
     report = {
         "state": state + "_offline_synthetic",
         "viewer_width_fraction": round(viewer_share, 4),
@@ -106,6 +131,8 @@ def _capture(window, app, outdir: Path, width: int, height: int, state: str):
         "network_used": False,
         "viewer_content": "BLANK_OFFLINE_PLACEHOLDER_NOT_SURVEY_IMAGERY",
         "scientific_status": "NO_SCIENCE_RESULT",
+        "science_workbench_visible": (
+            window.inspector_tabs.currentWidget() is window.science_qa),
         "splitter": _bounds(splitter, window),
         "regions": {
             "control_panel": _bounds(splitter.widget(0), window),
@@ -161,10 +188,46 @@ def main():
     # No Viewer navigation or archive activity from this controlled
     # capture process. The application source itself is NOT modified.
     reports = []
+    # Isolate launcher registry even when this script runs outside pytest:
+    # GUI evidence must NEVER alter the real user's recent-project index.
+    os.environ["LSBPIPE_SESSION_DIR"] = str(outdir.resolve() / ".session")
+    from lsbpipe.surveys.object_projects import library_index_path
+    fixture_root = outdir.resolve() / "test-project"
+    with offline_legacy_viewer():
+        hub = ProjectHub()
+        try:
+            for w, h in SIZES:
+                hub.resize(w, h)
+                hub.show()
+                app.processEvents()
+                path = outdir / f"hub_empty_{w}x{h}.png"
+                if not hub.grab().save(str(path), "PNG"):
+                    raise RuntimeError(f"Could not capture {path}")
+                reports.append({
+                    "state": "H0_empty_library_offline", "screenshot": path.name,
+                    "screenshot_bytes": path.stat().st_size,
+                    "network_used": False, "scientific_status": "NO_SCIENCE_RESULT"})
+            create_object_project("UGC 2162 · synthetic library entry", fixture_root)
+            hub.refresh()
+            for w, h in SIZES:
+                hub.resize(w, h)
+                hub.show()
+                app.processEvents()
+                path = outdir / f"hub_recent_{w}x{h}.png"
+                if not hub.grab().save(str(path), "PNG"):
+                    raise RuntimeError(f"Could not capture {path}")
+                reports.append({
+                    "state": "H1_recent_project_offline",
+                    "screenshot": path.name,
+                    "screenshot_bytes": path.stat().st_size,
+                    "network_used": False, "scientific_status": "NO_SCIENCE_RESULT"})
+        finally:
+            hub.close()
+        assert library_index_path().is_file()
     # Fresh widget instance for every state: no inadvertent selection/resize
     # carryover between screenshots, but all components are real Qt widgets.
     with offline_legacy_viewer():
-        for state in ("S0", "S1", "S2", "S3"):
+        for state in ("S0", "S1", "S2", "S3", "S4", "S5", "S6"):
             window = SurveyExplorer()
             try:
                 # Exercise the populated-state transition AFTER Qt has shown
@@ -186,7 +249,9 @@ def main():
         "screens": reports,
         "limitations": [
             "WebEngine intentionally replaced by a blank local offline placeholder",
-            "All catalog and product S1–S3 data are synthetic fixtures",
+            "All catalog and product S1–S6 data are synthetic fixtures",
+            "S4–S6 are mock UI content; no original FITS are opened",
+            "S5 FITS raster is artificial and cannot support scientific conclusions",
             "Offscreen Qt capture cannot verify real monitor / DPI rendering",
             "This job does not certify accessibility or scientific validity",
         ],

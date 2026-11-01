@@ -7,16 +7,18 @@ imported by the scientific numerical core.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl, QTimer, QEvent
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QLineEdit,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QInputDialog,
     QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget, QHeaderView, QDockWidget, QScrollArea, QSizePolicy)
+    QVBoxLayout, QWidget, QHeaderView, QDockWidget, QScrollArea, QSizePolicy,
+    QTabWidget)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 
@@ -25,9 +27,16 @@ from lsbpipe.surveys.legacy import (
 from lsbpipe.surveys.transfer import probe_product, download_manifest
 from lsbpipe.surveys.viewer import viewer_url, suggested_zoom
 from lsbpipe.surveys.selection import matching_product, summarize_selection
+from lsbpipe.surveys.local_project import (
+    open_local_project, save_local_project, last_project_directory)
 from lsbpipe.surveys.brick_overlay import brick_shapes, installation_script, highlight_script
 from lsbpipe.gui.target_input import (
     parse_ra_deg, parse_dec_deg, parse_width_arcmin, parse_coordinate_pair)
+from lsbpipe.gui.qa_workbench import ScienceQAControls
+from lsbpipe.gui.fits_explorer import FITSExplorer
+from lsbpipe.gui.fits_raster import prepare_fits_explorer
+from lsbpipe.gui.science_workflows import run_science_qa as run_science_qa_backend
+from lsbpipe.gui.qa_records import ScienceContext
 
 
 class _DiagnosticWebPage(QWebEnginePage):
@@ -60,6 +69,44 @@ class TaskWorker(QObject):
             self.failed.emit(f'{type(exc).__name__}: {exc}')
         finally:
             self.finished.emit()
+
+
+class _TaskDispatch(QObject):
+    """Deliver Python callbacks only on the thread owning the GUI QObject.
+
+    Plain functions/lambdas connected directly to worker signals can execute
+    on the worker thread under PySide6. GUI widgets and QMessageBox must never
+    be touched from that thread (QTextDocument/QBasicTimer native crash).
+    """
+
+    def __init__(self, owner: "SurveyExplorer", completed: Callable,
+                 on_error: Callable | None):
+        super().__init__(owner)
+        self._owner = owner
+        self._completed = completed
+        self._on_error = on_error
+
+    @Slot(object)
+    def deliver_completed(self, value):
+        try:
+            self._completed(value)
+        except Exception as exc:
+            logging.exception("LSBpipe GUI completion callback failed")
+            self.deliver_failed(f"{type(exc).__name__}: {exc}")
+
+    @Slot(str)
+    def deliver_failed(self, message: str):
+        self._owner.message.setText(message)
+        if self._on_error is not None:
+            try:
+                self._on_error(message)
+            except Exception:
+                logging.exception("LSBpipe GUI error callback failed")
+        QMessageBox.warning(self._owner, "Survey operation failed", message)
+
+    @Slot(object)
+    def deliver_progress(self, value):
+        self._owner._progress(value)
 
 
 class TargetTextField(QLineEdit):
@@ -115,9 +162,10 @@ class TargetTextField(QLineEdit):
 
 
 class SurveyExplorer(QMainWindow):
-    """Initial desktop flow: ICRS target -> release bricks -> file plan -> download."""
+    """Object-bound Legacy FITS workspace; may also run in legacy standalone mode."""
+    returnToProjects = Signal()
 
-    def __init__(self):
+    def __init__(self, *, restore_session=True, launch_remote=True):
         super().__init__()
         self.setWindowTitle("LSBpipe — Legacy Survey Explorer (experimental)")
         self.resize(1460, 880)
@@ -125,9 +173,26 @@ class SurveyExplorer(QMainWindow):
         self.manifest = None
         self.worker = None
         self.thread = None
+        self._task_dispatch = None
         self._brick_overlay_features = []
         self._brick_overlay_keys = []
+        self._qa_pixmap = None
+        self._qa_generation = 0
+        self._last_download_root = None
+        self._local_project = None
+        self._object_project = None
+        self._returning_to_hub = False
+        self._restore_session = restore_session
+        self._launch_remote = launch_remote
+        self._restoring_local_project = False
+        self._manual_target_edited = False
+        self._project_save_timer = QTimer(self)
+        self._project_save_timer.setSingleShot(True)
+        self._project_save_timer.setInterval(250)
+        self._project_save_timer.timeout.connect(self._save_project_state)
         self._build_ui()
+        if self._restore_session:
+            self._restore_last_project()
 
     def _build_ui(self):
         # Geometry/legibility rules only; retain OS light/dark palette.
@@ -197,7 +262,7 @@ class SurveyExplorer(QMainWindow):
         self.target_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         target_form.addWidget(self.target_hint)
         for field in (self.ra, self.dec, self.field_width):
-            field.textEdited.connect(self._target_edited)
+            field.textChanged.connect(self._target_edited)
 
         target_form.addWidget(QLabel("Data releases"))
         releases_container = QWidget()
@@ -227,6 +292,22 @@ class SurveyExplorer(QMainWindow):
         self.external_btn.clicked.connect(self.open_viewer_in_browser)
         secondary_actions.addWidget(self.external_btn)
         target_form.addLayout(secondary_actions)
+        self.back_to_projects = QPushButton("← All galaxy projects")
+        self.back_to_projects.setObjectName("workspace_back_to_projects")
+        self.back_to_projects.clicked.connect(self._go_back_to_projects)
+        self.back_to_projects.setVisible(False)
+        target_form.addWidget(self.back_to_projects)
+        self.open_project_btn = QPushButton("Open existing FITS project…")
+        self.open_project_btn.setObjectName("open_existing_local_project")
+        self.open_project_btn.setToolTip(
+            "Restore a downloaded Legacy FITS project directly from disk. "
+            "No archive search or network download is required.")
+        self.open_project_btn.clicked.connect(self._open_project_dialog)
+        target_form.addWidget(self.open_project_btn)
+        self.project_status = QLabel("No local project opened")
+        self.project_status.setObjectName("local_project_status")
+        self.project_status.setWordWrap(True)
+        target_form.addWidget(self.project_status)
         panel.addWidget(target_box)
 
         viewer_controls = QHBoxLayout()
@@ -424,7 +505,19 @@ class SurveyExplorer(QMainWindow):
         drawer_layout.setSpacing(4)
         drawer_layout.addWidget(self.data_scroll, 1)
         drawer_layout.addLayout(bottom, 0)
-        self.data_drawer.setWidget(drawer_body)
+        # Scientific analysis occupies its own tab, preserving the archive
+        # file table and pinned Save/Download actions without squeezing them.
+        self.inspector_tabs = QTabWidget()
+        self.inspector_tabs.setObjectName("science_inspector_tabs")
+        self.inspector_tabs.addTab(drawer_body, "Archive files")
+        self.science_qa = ScienceQAControls()
+        self.science_qa.requested.connect(self.start_science_qa)
+        self.science_qa.contextChanged.connect(
+            self._on_science_context_changed)
+        for radius in (self.target_radius, self.sky_inner, self.sky_outer):
+            radius.valueChanged.connect(self._on_science_context_changed)
+        self.inspector_tabs.addTab(self.science_qa, "Science QA")
+        self.data_drawer.setWidget(self.inspector_tabs)
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_drawer)
         self.data_drawer.visibilityChanged.connect(self._drawer_visibility_changed)
         self.data_drawer.hide()
@@ -458,7 +551,23 @@ class SurveyExplorer(QMainWindow):
             "REMOTE PREVIEW · Legacy Survey Viewer · not calibrated FITS input")
         self.preview_label.setAccessibleName("Remote image provenance warning")
         preview_layout.addWidget(self.preview_label)
-        preview_layout.addWidget(self.sky, 1)
+        self.preview_tabs = QTabWidget()
+        self.preview_tabs.setObjectName("scientific_preview_tabs")
+        self.preview_tabs.addTab(self.sky, "Remote sky")
+        self.qa_image_scroll = QScrollArea()
+        self.qa_image_scroll.setObjectName("local_fits_preview")
+        self.qa_image_scroll.setWidgetResizable(True)
+        self.qa_image = QLabel("Run 'Open four-layer FITS map' in Science QA.")
+        self.qa_image.setAlignment(Qt.AlignCenter)
+        self.qa_image.setWordWrap(True)
+        self.qa_image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.qa_image_scroll.setWidget(self.qa_image)
+        self.qa_image_scroll.viewport().installEventFilter(self)
+        self.preview_tabs.addTab(self.qa_image_scroll, "Four-layer QA")
+        self.fits_explorer = FITSExplorer()
+        self.preview_tabs.addTab(self.fits_explorer, "FITS Explorer")
+        self.preview_tabs.currentChanged.connect(self._preview_tab_changed)
+        preview_layout.addWidget(self.preview_tabs, 1)
         self.workspace_split = split
         split.addWidget(self.navigation_scroll)
         split.addWidget(preview_container)
@@ -470,7 +579,332 @@ class SurveyExplorer(QMainWindow):
         self.search_btn.setDefault(True)
         # Navigation to a remote web application is deliberately explicit.
         # RA/Dec spinbox edits must not trigger many remote page reloads.
-        self.show_viewer()
+        # Auto-resume does not require contacting the hosted Legacy Viewer.
+        if self._launch_remote and last_project_directory() is None:
+            self.show_viewer()
+
+    def attach_object_project(self, project):
+        """Bind explicit project identity before any remote/viewer operations."""
+        from lsbpipe.surveys.object_projects import ObjectProject
+        if not isinstance(project, ObjectProject):
+            raise TypeError("Workspace requires an object-project record")
+        self._object_project = project
+        self.back_to_projects.setVisible(True)
+        self.setWindowTitle(
+            f"LSBpipe · {project.display_name} · Galaxy Workspace")
+        self.open_project_btn.setVisible(False)
+        if (project.field is not None and
+                project.data_root is not None and project.data_root.is_dir()):
+            from lsbpipe.surveys.local_project import _candidate_images
+            if any(_candidate_images(project.data_root)):
+                # The object passport owns the adopted target center, chosen
+                # dataset and apertures. Legacy metadata supplies ONLY the
+                # read-only on-disk inventory on subsequent openings.
+                if not self._open_local_project_folder(
+                        project.data_root, from_object=True):
+                    raise ValueError(
+                        "Cannot open this project's saved original FITS inventory")
+                return
+        self._restoring_local_project = True
+        try:
+            self.hits = []
+            self.manifest = None
+            self.bricks.setRowCount(0)
+            self.files.setRowCount(0)
+            self.science_qa.set_selected_hit(None)
+            self.science_qa.set_data_root(
+                project.data_root if project.data_root is not None
+                else project.root / "data")
+            for widget, value in (
+                (self.target_radius, project.target_radius_arcsec),
+                (self.sky_inner, project.sky_inner_arcsec),
+                (self.sky_outer, project.sky_outer_arcsec),
+            ):
+                widget.setValue(value)
+            if project.field is None:
+                self.ra.clear()
+                self.dec.clear()
+                self.field_width.setValue(5.)
+                self.target_hint.setText(
+                    "No ICRS position yet · enter RA and Dec before Find data")
+                self.project_status.setText(
+                    f"{project.display_name} · draft target · no FITS")
+            else:
+                self.ra.setValue(project.field.ra_deg)
+                self.dec.setValue(project.field.dec_deg)
+                self.field_width.setValue(project.field.width_arcmin)
+                self.target_hint.setText(
+                    "Object project ready · choose Find data to discover FITS")
+                self.project_status.setText(
+                    f"{project.display_name} · target defined · no FITS")
+            self.inspector_tabs.setCurrentWidget(self.science_qa)
+            self.data_drawer.show()
+            self._size_data_drawer()
+            self.preview_tabs.setCurrentWidget(self.fits_explorer)
+            self.message.setText(
+                f"Project {project.display_name} opened offline. "
+                "No survey archive search has been performed.")
+        finally:
+            self._restoring_local_project = False
+
+    def _go_back_to_projects(self):
+        if self.thread is not None:
+            QMessageBox.information(
+                self, "Operation running",
+                "Finish the active task before leaving this galaxy project.")
+            return
+        self._save_project_state()
+        self.returnToProjects.emit()
+
+    def _save_object_project_context(self):
+        project = self._object_project
+        if project is None or self._restoring_local_project:
+            return
+        from lsbpipe.surveys.object_projects import save_object_project
+        try:
+            # Resolve the entire new state before touching the manifest.
+            # Invalid text drafts never persist half an ICRS position.
+            new_field = (
+                None if not self.ra.text().strip() and not self.dec.text().strip()
+                else self._field())
+            row = self.bricks.currentRow()
+            selected = project.selected_dataset
+            if (self._brick_result_matches_target()
+                    and self.bricks.selectedItems()
+                    and 0 <= row < len(self.hits)):
+                hit = self.hits[row]
+                selected = (hit.release, hit.region, hit.name,
+                            self.science_qa.current_band())
+            project.field = new_field
+            project.selected_dataset = selected
+            project.target_radius_arcsec = self.target_radius.value()
+            project.sky_inner_arcsec = self.sky_inner.value()
+            project.sky_outer_arcsec = self.sky_outer.value()
+            if self._local_project is not None:
+                project.data_root = self._local_project.data_root
+                if self._local_project.last_science:
+                    project.last_science = self._local_project.last_science
+            save_object_project(project)
+        except (ValueError, OSError) as exc:
+            self.project_status.setText(
+                f"Project remains open; saving its context failed: {exc}")
+
+    def _open_project_dialog(self):
+        initial = (last_project_directory() or
+                   Path(self.science_qa.directory.text().strip() or Path.home()))
+        directory = QFileDialog.getExistingDirectory(
+            self, "Open existing Legacy FITS project", str(initial))
+        if directory:
+            self._open_local_project_folder(directory)
+
+    def _open_local_project_folder(self, directory, *, startup=False,
+                                   from_object=False):
+        """Read-only original FITS discovery, with object passport authority."""
+        try:
+            obj = self._object_project
+            fallback = (self._field() if self._manual_target_edited
+                        and not startup and not from_object else None)
+            if from_object and (obj is None or obj.field is None):
+                raise ValueError("Object project requires an accepted ICRS position")
+            project = open_local_project(
+                directory, fallback_field=fallback,
+                authoritative_field=obj.field if from_object else None,
+                authoritative_selected=obj.selected_dataset if from_object
+                else None)
+            if from_object:
+                project.target_radius_arcsec = obj.target_radius_arcsec
+                project.sky_inner_arcsec = obj.sky_inner_arcsec
+                project.sky_outer_arcsec = obj.sky_outer_arcsec
+                project.last_science = obj.last_science
+        except (OSError, ValueError, KeyError) as exc:
+            self.project_status.setText(f"Cannot open local project: {exc}")
+            if not startup:
+                QMessageBox.warning(self, "Cannot open local FITS project", str(exc))
+            return False
+        self._install_local_project(project)
+        if self._object_project is None:
+            # Legacy standalone mode continues its established session
+            # writer. In object-project mode the old 0.1 file is immutable.
+            try:
+                save_local_project(project)
+            except (OSError, ValueError) as exc:
+                self.project_status.setText(
+                    f"Local files opened, but session could not be saved: {exc}")
+        else:
+            self._queue_project_save()
+        return True
+
+    def _restore_last_project(self):
+        root = last_project_directory()
+        if root is not None and self._open_local_project_folder(root, startup=True):
+            return
+        if root is not None:
+            self.message.setText(
+                "Previously selected project not found or invalid. "
+                "Choose Open existing FITS project to recover it.")
+            self.show_viewer()
+
+    def _install_local_project(self, project):
+        """Rebuild the existing project and selected QA context from disk."""
+        from lsbpipe.surveys.legacy import build_manifest
+        self._project_save_timer.stop()
+        self._restoring_local_project = True
+        try:
+            self._local_project = project
+            self._manual_target_edited = False
+            for widget, value in (
+                (self.ra, project.field.ra_deg),
+                (self.dec, project.field.dec_deg),
+                (self.field_width, project.field.width_arcmin),
+            ):
+                widget.setValue(value)
+            for release, checkbox in self.release_boxes.items():
+                checkbox.setChecked(
+                    any(hit.release == release for hit in project.hits))
+            self.hits = project.hits
+            self.manifest = build_manifest(project.field, project.hits)
+            # Local filenames do not contain official brick geometry or NEXP.
+            self._brick_overlay_features, self._brick_overlay_keys = [], []
+            self.bricks.blockSignals(True)
+            self.bricks.setRowCount(len(self.hits))
+            for row, hit in enumerate(self.hits):
+                for col, value in enumerate((
+                    hit.release.upper(), hit.region, hit.name, "—/—/—/—"
+                )):
+                    self.bricks.setItem(row, col, QTableWidgetItem(value))
+            self.bricks.clearSelection()
+            self.bricks.blockSignals(False)
+            self._fill_brick_filters()
+            self._fill_files(checked_paths=project.on_disk)
+            for widget, value in (
+                (self.target_radius, project.target_radius_arcsec),
+                (self.sky_inner, project.sky_inner_arcsec),
+                (self.sky_outer, project.sky_outer_arcsec),
+            ):
+                widget.setValue(value)
+            self.science_qa.set_data_root(project.data_root)
+            if any(hit.region == "north" for hit in project.hits):
+                self.science_qa.north_directory.setText(str(project.data_root))
+            if any(hit.region == "south" for hit in project.hits):
+                self.science_qa.south_directory.setText(str(project.data_root))
+            chosen = project.selected
+            row = next(
+                (i for i, hit in enumerate(self.hits) if chosen and
+                 (hit.release, hit.region, hit.name) == chosen[:3]), 0)
+            unavailable_selection = bool(
+                self._object_project is not None
+                and self._object_project.selected_dataset is not None
+                and chosen != self._object_project.selected_dataset)
+            if self.hits and not unavailable_selection:
+                self.bricks.selectRow(row)
+                if chosen and chosen[3] in self.hits[row].median_exposures:
+                    self.science_qa.band.setCurrentText(chosen[3])
+                hit = self.hits[row]
+                project.selected = (hit.release, hit.region, hit.name,
+                                    self.science_qa.current_band())
+            elif unavailable_selection:
+                # Inventory fallback is informational, not a new scientific
+                # selection. Require a deliberate row choice before QA/save.
+                self.bricks.clearSelection()
+                self.science_qa.set_selected_hit(None)
+            self._mark_local_files()
+            if unavailable_selection:
+                self.project_status.setText(
+                    "Saved dataset missing from original FITS inventory. "
+                    "Choose a present brick deliberately; the stored "
+                    "selection has not been changed.")
+            self.target_hint.setText(
+                f"Local ICRS target from {project.field_source}; no archive search")
+            self.message.setText(
+                "Saved dataset unavailable: select a present brick before QA."
+                if unavailable_selection else
+                f"Restored {project.root.name} from existing original FITS. "
+                "Run Science QA without downloading again.")
+            self.preview_label.setText(
+                "LOCAL PROJECT · offline restored · Remote Viewer not refreshed")
+            self.preview_tabs.setCurrentWidget(self.fits_explorer)
+            self.inspector_tabs.setCurrentWidget(self.science_qa)
+            self.data_drawer.show()
+            self._size_data_drawer()
+            self._restore_prior_qa(project)
+        finally:
+            self._restoring_local_project = False
+
+    def _restore_prior_qa(self, project):
+        item = project.last_science
+        key = project.selected
+        if not key or not item or tuple(item.get("provenance", ())) != key:
+            return
+        path = Path(item.get("path", ""))
+        manifest = Path(item.get("manifest_path", ""))
+        qa_dir = project.data_root.parent / "qa-runs"
+        try:
+            if not (path.is_file() and manifest.is_file() and
+                    path.resolve().is_relative_to(qa_dir.resolve()) and
+                    path.parent == manifest.parent):
+                return
+            record = json.loads(manifest.read_text(encoding="utf-8"))
+            context = record.get("context", {})
+            if record.get("schema") != "lsbpipe.gui-science-qa/1":
+                return
+            if not all(context.get(name) == value for name, value in (
+                    ("release", key[0]), ("region", key[1]),
+                    ("brick", key[2]), ("band", key[3]))):
+                return
+            if not all(abs(float(context.get(name, -999)) - value) < 1e-9
+                       for name, value in (
+                           ("ra_deg", project.field.ra_deg),
+                           ("dec_deg", project.field.dec_deg),
+                           ("width_arcmin", project.field.width_arcmin))):
+                return
+        except (OSError, ValueError, TypeError, KeyError):
+            return
+        self.science_qa.show_result({
+            "summary": item.get("summary", "Earlier QA report") +
+                "\n\nRESTORED HISTORY: original FITS hashes have not been "
+                "revalidated on reopening.",
+            "path": str(path), "manifest_path": str(manifest),
+            "is_figure": path.suffix.lower() == ".png"})
+        self.message.setText(
+            "Previous QA report reopened for inspection only; "
+            "rerun the diagnostic before scientific use.")
+
+    def _queue_project_save(self):
+        if self._restoring_local_project:
+            return
+        if self._object_project is not None or (
+                self._local_project is not None and
+                self._brick_result_matches_target()):
+            self._project_save_timer.start()
+
+    def _save_project_state(self):
+        self._save_object_project_context()
+        if self._object_project is not None:
+            # Never touch the old project schema after object migration.
+            return
+        project = self._local_project
+        if project is None or self._restoring_local_project:
+            return
+        if not self._brick_result_matches_target():
+            return
+        directory = self.science_qa.directory.text().strip()
+        if (not directory or Path(directory).resolve() not in (
+                project.root.resolve(), project.data_root.resolve())):
+            return
+        row = self.bricks.currentRow()
+        if not (self.bricks.selectedItems() and 0 <= row < len(self.hits)):
+            return
+        hit = self.hits[row]
+        project.selected = (hit.release, hit.region, hit.name,
+                            self.science_qa.current_band())
+        project.target_radius_arcsec = self.target_radius.value()
+        project.sky_inner_arcsec = self.sky_inner.value()
+        project.sky_outer_arcsec = self.sky_outer.value()
+        try:
+            save_local_project(project)
+        except (OSError, ValueError) as exc:
+            self.project_status.setText(
+                f"Science files remain available; session save failed: {exc}")
 
     def _toggle_data_drawer(self):
         visible = not self.data_drawer.isVisible()
@@ -527,6 +961,11 @@ class SurveyExplorer(QMainWindow):
         return field
 
     def _target_edited(self, *_):
+        if self._restoring_local_project:
+            return
+        self._manual_target_edited = True
+        if hasattr(self, "science_qa"):
+            self._on_science_context_changed()
         # The existing bricks, if any, describe the previous target field.
         self.target_hint.setText(
             "Target changed · run Find data again to refresh the bricks"
@@ -644,10 +1083,19 @@ class SurveyExplorer(QMainWindow):
     def _selected_brick_changed(self):
         """Highlight selected brick without reloading the hosted map."""
         row = self.bricks.currentRow()
+        if hasattr(self, "science_qa"):
+            chosen = (self.hits[row]
+                      if self.bricks.selectedItems() and
+                      0 <= row < len(self.hits) else None)
+            previous = self.science_qa._hit
+            self.science_qa.set_selected_hit(chosen)
+            if previous != chosen:
+                self._invalidate_qa_figure()
         key = (self._brick_overlay_keys[row]
                if self.bricks.selectedItems() and
                   0 <= row < len(self._brick_overlay_keys) else None)
         self._run_brick_js(highlight_script(key))
+        self._queue_project_save()
 
     def _hover_brick_row(self, row, _column):
         key = (self._brick_overlay_keys[row]
@@ -655,6 +1103,10 @@ class SurveyExplorer(QMainWindow):
         self._run_brick_js(highlight_script(key, hover=True))
 
     def eventFilter(self, watched, event):
+        if (hasattr(self, "qa_image_scroll") and
+                watched is self.qa_image_scroll.viewport() and
+                event.type() == QEvent.Resize):
+            QTimer.singleShot(0, self._resize_qa_pixmap)
         if (hasattr(self, "bricks") and
                 watched is self.bricks.viewport() and
                 event.type() == QEvent.Leave):
@@ -667,6 +1119,13 @@ class SurveyExplorer(QMainWindow):
         if row < 0 or row >= len(self.hits):
             return
         hit = self.hits[row]
+        if self._local_project is not None:
+            # No fictional brick centers from placeholder coordinates.
+            self.message.setText(
+                "This project was restored from local filenames only; "
+                "official brick geometry is unavailable offline. "
+                "Use Show target for the known ICRS position.")
+            return
         mid_ra = (hit.ra1 + ((hit.ra2-hit.ra1) % 360.)/2.) % 360.
         mid_dec = (hit.dec1 + hit.dec2) / 2.
         field_width = self._validated_field()
@@ -735,7 +1194,7 @@ class SurveyExplorer(QMainWindow):
             QMessageBox.information(self, "Legacy Viewer status", chr(10).join(lines))
         self.sky.page().runJavaScript(probe, done)
 
-    def _start(self, action, finished):
+    def _start(self, action, finished, on_error=None):
         if self.thread is not None:
             QMessageBox.information(self, "Busy", "Another survey operation is running.")
             return
@@ -743,30 +1202,39 @@ class SurveyExplorer(QMainWindow):
         self.download_btn.setEnabled(False)
         self.verify_btn.setEnabled(False)
         self.qa_btn.setEnabled(False)
+        self.science_qa.set_busy(True)
         thread = QThread(self)
         worker = TaskWorker(action)
+        # The receiver is a QObject created in the main thread. Its decorated
+        # slots force queued cross-thread delivery even for Python closures.
+        # Keep it alive until QThread.finished, never until worker.finished:
+        # pending completion/progress events may still be in the GUI queue.
+        dispatch = _TaskDispatch(self, finished, on_error)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.completed.connect(finished)
-        worker.failed.connect(lambda msg: (
-            self.message.setText(msg),
-            QMessageBox.warning(self, "Survey operation failed", msg)))
-        worker.progress.connect(self._progress)
+        worker.completed.connect(dispatch.deliver_completed, Qt.QueuedConnection)
+        worker.failed.connect(dispatch.deliver_failed, Qt.QueuedConnection)
+        worker.progress.connect(dispatch.deliver_progress, Qt.QueuedConnection)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(dispatch.deleteLater)
         thread.finished.connect(self._idle)
+        self._task_dispatch = dispatch
         self.worker = worker
         self.thread = thread
         thread.start()
 
+    @Slot()
     def _idle(self):
         self.thread = None
         self.worker = None
+        self._task_dispatch = None
         self.search_btn.setEnabled(True)
         self.download_btn.setEnabled(True)
         self.verify_btn.setEnabled(True)
         self.qa_btn.setEnabled(True)
+        self.science_qa.set_busy(False)
 
     def _progress(self, item):
         if isinstance(item, tuple):
@@ -783,7 +1251,13 @@ class SurveyExplorer(QMainWindow):
         if not releases:
             QMessageBox.warning(self, "Select a release", "Choose at least one data release.")
             return
+        # Explicit archive search detaches the local-only, offline view.
+        # Previous project metadata and original data remain on disk.
+        self._project_save_timer.stop()
+        self._local_project = None
+        self.project_status.setText("Archive search · no local project selected")
         self.manifest = None
+        self.science_qa.set_selected_hit(None)
         self.bricks.setRowCount(0)
         self.files.setRowCount(0)
         self.message.setText("Loading survey geometry and footprint catalogs…")
@@ -809,6 +1283,7 @@ class SurveyExplorer(QMainWindow):
         # The table is the source for release and NEXP context.
         # The map shows unique sky-brick outlines; no duplicate prose needed.
         self.bricks.clearSelection()
+        self.science_qa.set_selected_hit(None)
         self.show_viewer()
         self._fill_brick_filters()
         self._fill_files()
@@ -853,6 +1328,32 @@ class SurveyExplorer(QMainWindow):
                 item.setToolTip(detail + chr(10) + f"Status: {entry['evidence']}")
                 self.files.setItem(row, col, item)
         self._filter_products()
+        self._mark_local_files()
+
+    def _mark_local_files(self):
+        """Annotate local evidence separately from remote HTTP verification."""
+        project = self._local_project
+        if project is None or self.manifest is None:
+            return
+        for row, entry in enumerate(self.manifest["products"]):
+            path = entry["relative_path"]
+            local = project.data_root / path
+            if path in project.on_disk and local.is_file():
+                mib = local.stat().st_size / 1048576.
+                self.files.item(row, 3).setText(f"{mib:.0f}")
+                self.files.item(row, 3).setToolTip(
+                    f"LOCAL PRESENT · {local} · {mib:.2f} MiB. "
+                    "Existence is not a science/remote integrity check.")
+                name = self.files.item(row, 1)
+                name.setToolTip(name.toolTip() + "\nLOCAL PRESENT (unverified)")
+            else:
+                name = self.files.item(row, 1)
+                name.setToolTip(name.toolTip() + "\nNOT FOUND in active local project")
+        complete = sum(project.complete.values())
+        self.project_status.setText(
+            f"LOCAL · {project.root.name} · {len(project.on_disk)} original "
+            f"products on disk · {complete}/{len(project.complete)} "
+            "complete band quartets (not scientifically verified)")
 
     @staticmethod
     def _short_http_evidence(evidence):
@@ -1035,6 +1536,12 @@ class SurveyExplorer(QMainWindow):
         if not selected:
             QMessageBox.warning(self, "Nothing selected", "Select at least one product.")
             return
+        if self._local_project is not None and selected.issubset(
+                self._local_project.on_disk):
+            self.message.setText(
+                f"All {len(selected)} selected science products already "
+                "exist locally. No network download was attempted.")
+            return
         report = summarize_selection(self.manifest["products"], selected)
         amount = (f"Known size: {report.known_mib:.1f} MiB" +
                   (f" + {report.unknown_size_files} unknown-sized files."
@@ -1052,10 +1559,14 @@ class SurveyExplorer(QMainWindow):
                 QMessageBox.No) != QMessageBox.Yes:
             return
         directory = QFileDialog.getExistingDirectory(
-            self, "Choose the science data directory", str(Path.home()))
+            self, "Choose the science data directory",
+            str(self._local_project.data_root if self._local_project
+                else self._object_project.root if self._object_project
+                else Path.home()))
         if not directory:
             return
         manifest = json.loads(json.dumps(self.manifest))
+        self._last_download_root = str(directory)
         self.bar.setValue(0)
         self.message.setText("Downloading original archive FITS files…")
 
@@ -1143,6 +1654,14 @@ class SurveyExplorer(QMainWindow):
             self, "Legacy FITS coverage — diagnostic", chr(10).join(lines))
 
     def _receive_download(self, report):
+        if self._last_download_root:
+            row = self.bricks.currentRow()
+            selected = (self.hits[row]
+                        if self.bricks.selectedItems() and
+                        0 <= row < len(self.hits) else None)
+            self.science_qa.set_data_root(
+                self._last_download_root,
+                region=selected.region if selected is not None else None)
         successes = sum(x["state"] != "ERROR" for x in report["results"])
         failures = len(report["results"]) - successes
         self.message.setText(
@@ -1151,6 +1670,375 @@ class SurveyExplorer(QMainWindow):
         if failures:
             QMessageBox.warning(self, "Incomplete download",
                 f"{failures} files failed. Inspect download-report.json.")
+        if successes and self._last_download_root:
+            # A new download may follow an explicit target edit. Persist that
+            # accepted object position *before* reopening its local inventory.
+            # Never let stale 0.1 metadata replace the newly searched target.
+            if self._object_project is not None:
+                self._save_object_project_context()
+                self._open_local_project_folder(
+                    self._last_download_root, from_object=True)
+            else:
+                self._manual_target_edited = True
+                self._open_local_project_folder(self._last_download_root)
+
+    def _on_science_context_changed(self, *_):
+        self._qa_generation += 1
+        if hasattr(self, "science_qa"):
+            self.science_qa.clear_result()
+        self._invalidate_qa_figure()
+        self._queue_project_save()
+
+    def _invalidate_qa_figure(self, *_):
+        if hasattr(self, "fits_explorer"):
+            self.fits_explorer.clear_data()
+        self._qa_pixmap = None
+        if hasattr(self, "qa_image"):
+            self.qa_image.clear()
+            self.qa_image.setText(
+                "The selected target, brick or band changed. "
+                "Rerun the local FITS QA map.")
+
+    def _preview_tab_changed(self, tab):
+        if tab in (1, 2):
+            self.preview_label.setText(
+                "LOCAL ORIGINAL FITS · read-only · DIAGNOSTIC_NOT_ADOPTED")
+        else:
+            self.preview_label.setText(
+                "REMOTE PREVIEW · Legacy Survey Viewer · not calibrated FITS input")
+
+    def _resize_qa_pixmap(self):
+        if self._qa_pixmap is None:
+            return
+        viewport = self.qa_image_scroll.viewport().size()
+        width, height = max(viewport.width() - 14, 1), max(viewport.height() - 14, 1)
+        if width < 10 or height < 10:
+            return
+        display = self._qa_pixmap.scaled(
+            width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.qa_image.setPixmap(display)
+
+    def _start_dataset_audit(self):
+        """Standalone offline inspection: no selected brick is required."""
+        from lsbpipe.surveys.dataset_integrity import (
+            audit_dataset_root, save_dataset_audit)
+        raw = self.science_qa.directory.text().strip()
+        if not raw:
+            QMessageBox.warning(
+                self, "No original FITS folder",
+                "Select the directory containing your Legacy FITS data.")
+            return
+        directory = Path(raw).expanduser().resolve()
+        if directory.name != "data" and (directory / "data").is_dir():
+            directory = directory / "data"
+        project = self._object_project
+        output_root = (project.root if project else
+                       self._local_project.root if self._local_project else
+                       directory.parent if directory.name == "data" else directory)
+        project_id = project.project_id if project is not None else None
+        try:
+            # Draft targets may inspect the dataset inventory without a
+            # footprint; half-edited positions must never be interpreted as
+            # an adopted ICRS center.
+            field = self._field() if (
+                self.ra.text().strip() and self.dec.text().strip()) else None
+            if bool(self.ra.text().strip()) != bool(self.dec.text().strip()):
+                raise ValueError("Enter both RA and Dec for sky footprint")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid ICRS field", str(exc))
+            return
+        ticket = self._qa_generation
+        self.inspector_tabs.setCurrentWidget(self.science_qa)
+        self.science_qa.clear_result()
+        self.science_qa.mark_running("dataset_audit")
+        self.science_qa.result.setPlainText(
+            "Verifying native FITS HDUs/WCS and sampled multi-brick sky coverage…"
+            "\nOriginals remain read-only. No archive requests.")
+        self.message.setText("Auditing local FITS datasets…")
+
+        def work(progress):
+            report = audit_dataset_root(
+                directory, field=field, pitch_arcsec=2.,
+                progress=progress)
+            path = save_dataset_audit(
+                report, output_root, project_id=project_id)
+            return report, path
+
+        def finished(data):
+            report, path = data
+            if (ticket != self._qa_generation or
+                    Path(self.science_qa.directory.text().strip()).expanduser().resolve()
+                    not in (directory, directory.parent) or
+                    self._object_project is not project):
+                self.message.setText(
+                    "Dataset audit completed for an older project selection; "
+                    "saved receipt not displayed.")
+                return
+            validated = report["counts"]["validated"]
+            total = report["counts"]["total"]
+            groups = report["multi_brick_groups"]
+            lines = [
+                f"Local datasets: {total}; FITS/WCS validated: {validated}.",
+                f"Missing, incomplete or invalid: "
+                f"{report['counts']['incomplete_or_invalid']}.",
+                "All outcomes are DIAGNOSTIC_NOT_ADOPTED.",
+                "North and South remain separate data families.",
+            ]
+            for g in groups:
+                lines.append(
+                    f"{g['release'].upper()} {g['region']} {g['band']}: "
+                    f"{100*g['geometric_sample_fraction']:.2f}% geometrically "
+                    f"sampled; {100*g['instrumentally_usable_sample_fraction']:.2f}% "
+                    f"instrumentally usable; {g['overlapping_geometric_samples']} "
+                    "overlapping sampled cells.")
+            self.science_qa.show_result({
+                "summary": "\n".join(lines), "path": str(path),
+                "manifest_path": str(path), "is_figure": False,
+            })
+            if project is not None:
+                from lsbpipe.surveys.object_projects import save_object_project
+                project.last_dataset_audit = {
+                    "relative_path": path.relative_to(project.root).as_posix(),
+                    "data_root": str(directory),
+                    "created_utc": report["created_utc"],
+                    "validated": validated,
+                    "total": total,
+                    "science_status": "DIAGNOSTIC_NOT_ADOPTED",
+                }
+                try:
+                    save_object_project(project)
+                except (ValueError, OSError) as exc:
+                    self.project_status.setText(
+                        f"Dataset audit saved but project index update failed: {exc}")
+            self.message.setText(
+                f"Dataset integrity audit saved: {path}")
+            self.project_status.setText(
+                f"FITS audit: {validated}/{total} quartets validated, "
+                "not scientifically adopted.")
+
+        self._start(
+            work, finished,
+            on_error=lambda msg: self.science_qa.show_error(msg)
+            if ticket == self._qa_generation else None)
+
+    def start_science_qa(self, action: str):
+        """Run an existing original-FITS scientific validator in a worker.
+
+        No network calls; context is frozen before QThread starts. A stale
+        target/brick selection can never be silently analyzed as new data.
+        """
+        if action == "dataset_audit":
+            if self.thread is not None:
+                QMessageBox.information(
+                    self, "Busy", "Another survey operation is running.")
+                return
+            self._start_dataset_audit()
+            return
+        if self.thread is not None:
+            QMessageBox.information(
+                self, "Busy", "Another survey operation is running.")
+            return
+        if not self._brick_result_matches_target():
+            QMessageBox.warning(
+                self, "Search first",
+                "Search this ICRS target again before analyzing a selected "
+                "brick. The previous result may belong to another field.")
+            return
+        row = self.bricks.currentRow()
+        if (row < 0 or row >= len(self.hits) or
+                not self.bricks.selectedItems()):
+            QMessageBox.information(
+                self, "Select a brick",
+                "Select one release/region/brick row in the left table.")
+            return
+        field = self._validated_field()
+        if field is None:
+            return
+        hit = self.hits[row]
+        band = self.science_qa.current_band()
+        directory = self.science_qa.directory.text().strip()
+        north = self.science_qa.north_directory.text().strip()
+        south = self.science_qa.south_directory.text().strip()
+        if action == "compare":
+            if not north or not south:
+                QMessageBox.information(
+                    self, "Choose both data folders",
+                    "Select separate original DR9 North and South "
+                    "download folders before comparing native pixels.")
+                return
+        elif not directory:
+            QMessageBox.information(
+                self, "Choose local FITS",
+                "Select a downloaded FITS folder in the Science QA tab.")
+            return
+        target, inner, outer = (
+            self.target_radius.value(),
+            self.sky_inner.value(), self.sky_outer.value())
+        if not 0 < target <= inner < outer <= 1200:
+            QMessageBox.warning(
+                self, "Invalid QA radii",
+                "Require 0 < object radius <= sky inner < sky outer <= 1200 arcsec")
+            return
+        context = ScienceContext.capture(
+            action=action, field=field, hit=hit, band=band,
+            directory=directory, north_directory=north, south_directory=south,
+            target_radius_arcsec=target, sky_inner_arcsec=inner,
+            sky_outer_arcsec=outer)
+        ticket = self._qa_generation
+        self.inspector_tabs.setCurrentWidget(self.science_qa)
+        self.science_qa.clear_result()
+        self.message.setText("Analyzing original local FITS · " + action + "…")
+        self.science_qa.mark_running(action)
+        self.science_qa.result.setPlainText(
+            "Computing " + action + " from original local FITS…")
+        if action == "explore":
+            def job(progress):
+                return prepare_fits_explorer(
+                    directory=directory, field=field, hit=hit, band=band,
+                    target_radius_arcsec=target,
+                    sky_inner_arcsec=inner, sky_outer_arcsec=outer)
+            self._start(
+                job,
+                lambda data: self._deliver_science_result(
+                    data, context=context, ticket=ticket,
+                    callback=self._fits_explorer_ready),
+                on_error=lambda message: self._deliver_science_error(
+                    message, context=context, ticket=ticket))
+        else:
+            def job(progress):
+                return run_science_qa_backend(
+                    action, field=field, hit=hit, band=band, directory=directory,
+                    north_directory=north, south_directory=south,
+                    target_radius_arcsec=target,
+                    sky_inner_arcsec=inner, sky_outer_arcsec=outer,
+                    context=context)
+            # Connect errors before the worker starts.
+            self._start(
+                job,
+                lambda data: self._deliver_science_result(
+                    data, context=context, ticket=ticket,
+                    callback=self._science_qa_ready),
+                on_error=lambda message: self._deliver_science_error(
+                    message, context=context, ticket=ticket))
+
+    def _current_science_context(self, action):
+        if not self._brick_result_matches_target():
+            return None
+        row = self.bricks.currentRow()
+        if not (self.bricks.selectedItems() and 0 <= row < len(self.hits)):
+            return None
+        try:
+            field = self._field()
+        except ValueError:
+            return None
+        return ScienceContext.capture(
+            action=action, field=field, hit=self.hits[row],
+            band=self.science_qa.current_band(),
+            directory=self.science_qa.directory.text().strip(),
+            north_directory=self.science_qa.north_directory.text().strip(),
+            south_directory=self.science_qa.south_directory.text().strip(),
+            target_radius_arcsec=self.target_radius.value(),
+            sky_inner_arcsec=self.sky_inner.value(),
+            sky_outer_arcsec=self.sky_outer.value())
+
+    def _science_ticket_current(self, *, context, ticket):
+        return (ticket == self._qa_generation and
+                self._current_science_context(context.action) == context)
+
+    def _deliver_science_result(self, result, *, context, ticket, callback):
+        if not self._science_ticket_current(context=context, ticket=ticket):
+            self.message.setText(
+                "Previous science job finished: outdated selection ignored.")
+            return
+        if callback == self._science_qa_ready and result.get("context") != context:
+            self.science_qa.show_error(
+                "Science result has a different frozen input context.")
+            return
+        callback(result)
+
+    def _deliver_science_error(self, message, *, context, ticket):
+        if self._science_ticket_current(context=context, ticket=ticket):
+            self.science_qa.show_error(message)
+
+    def _fits_explorer_ready(self, dataset):
+        if not self._qa_context_current(dataset):
+            self.message.setText(
+                "Discarded stale FITS view: selected field or brick changed.")
+            self.science_qa.clear_result()
+            return
+        self.fits_explorer.set_dataset(dataset)
+        self.preview_tabs.setCurrentWidget(self.fits_explorer)
+        # An interactive view is not a new saved science report; do not
+        # leave an old unrelated JSON report button looking current.
+        self.science_qa.clear_result()
+        self.science_qa.steps.setItemText(
+            0, self.science_qa._step_names[0] + " · Viewer ready")
+        self.science_qa.result.setPlainText(
+            f"{dataset['source']} · original four-HDU FITS cutout\n"
+            f"{dataset['pixel_shape'][1]} × {dataset['pixel_shape'][0]} pixels\n"
+            "Use the center viewer to inspect individual source pixels.\n"
+            "DISPLAY ONLY · DIAGNOSTIC_NOT_ADOPTED")
+        self.message.setText(
+            "Interactive original-FITS view loaded: " + dataset["source"])
+
+    def _qa_context_current(self, dataset):
+        try:
+            field = self._field()
+        except ValueError:
+            return False
+        saved_field = dataset["field"]
+        if any(abs(a-b) > 1e-9 for a,b in (
+                (field.ra_deg, saved_field.ra_deg),
+                (field.dec_deg, saved_field.dec_deg),
+                (field.width_arcmin, saved_field.width_arcmin))):
+            return False
+        row = self.bricks.currentRow()
+        if not (self.bricks.selectedItems() and
+                0 <= row < len(self.hits)):
+            return False
+        h = self.hits[row]
+        identity = (
+            f"{h.release.upper()} {h.region} · {h.name} · "
+            f"{self.science_qa.current_band()}")
+        return dataset["source"] == identity
+
+    def _science_qa_ready(self, result):
+        if not self._brick_result_matches_target():
+            self.message.setText("Discarded stale QA result for edited field.")
+            self.science_qa.clear_result()
+            return
+        row = self.bricks.currentRow()
+        if (row < 0 or row >= len(self.hits) or
+                not self.bricks.selectedItems()):
+            self.science_qa.clear_result()
+            return
+        expected = (
+            self.hits[row].release, self.hits[row].region,
+            self.hits[row].name, self.science_qa.current_band())
+        if result.get("provenance") != expected:
+            self.science_qa.clear_result()
+            return
+        self.science_qa.show_result(result)
+        if self._local_project is not None:
+            self._local_project.last_science = {
+                "action": result["action"], "path": result["path"],
+                "manifest_path": result.get("manifest_path", ""),
+                "summary": result["summary"],
+                "provenance": list(result["provenance"])}
+            self._queue_project_save()
+        self.message.setText(
+            "Local FITS QA saved (not adopted): " + result["path"])
+        if result["is_figure"]:
+            pixmap = QPixmap(result["path"])
+            if pixmap.isNull():
+                QMessageBox.warning(
+                    self, "FITS figure not readable",
+                    "The diagnostic figure was saved, but Qt could not open "
+                    "the preview. Open the PNG externally from Science QA.")
+                return
+            self._qa_pixmap = pixmap
+            self.preview_tabs.setCurrentWidget(self.qa_image_scroll)
+            self._resize_qa_pixmap()
 
     def closeEvent(self, event):
         if self.thread is not None:
@@ -1158,11 +2046,16 @@ class SurveyExplorer(QMainWindow):
                                     "Complete the active operation before closing.")
             event.ignore()
         else:
+            self._project_save_timer.stop()
+            self._save_project_state()
+            if self._object_project is not None and not self._returning_to_hub:
+                self.returnToProjects.emit()
+                event.ignore()
+                return
             super().closeEvent(event)
 
 
 def main():
-    app = QApplication.instance() or QApplication([])
-    window = SurveyExplorer()
-    window.show()
-    return app.exec()
+    """Console script uses the same Project Hub as python -m lsbpipe.gui."""
+    from .project_hub import main as launch_hub
+    return launch_hub()
