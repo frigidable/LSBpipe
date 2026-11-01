@@ -178,3 +178,101 @@ def test_last_project_from_older_lsbpipe_is_visible_without_mutation(tmp_path):
     assert updated[0]["project_id"] == project.project_id
     assert not updated[0].get("legacy", False)
     assert all(p.is_file() for p in data.rglob("*.fits.fz"))
+
+
+def test_object_passport_radii_survive_restart_and_old_schema_defaults(tmp_path):
+    project = create_object_project("Radii", tmp_path / "Radii", field=FIELD)
+    project.target_radius_arcsec = 35.
+    project.sky_inner_arcsec = 65.
+    project.sky_outer_arcsec = 110.
+    save_object_project(project)
+    reopened = read_object_project(project.root)
+    assert (reopened.target_radius_arcsec, reopened.sky_inner_arcsec,
+            reopened.sky_outer_arcsec) == (35., 65., 110.)
+    meta = reopened.root / PROJECT_FILENAME
+    record = json.loads(meta.read_text(encoding="utf-8"))
+    for key in ("target_radius_arcsec", "sky_inner_arcsec", "sky_outer_arcsec"):
+        del record[key]
+    meta.write_text(json.dumps(record), encoding="utf-8")
+    older = read_object_project(reopened.root)
+    assert (older.target_radius_arcsec, older.sky_inner_arcsec,
+            older.sky_outer_arcsec) == (60., 90., 180.)
+
+
+def test_old_ugc_import_migrates_radii_while_preserving_legacy_bytes(tmp_path):
+    root = tmp_path / "UGC_2162"
+    _old_folder(root)
+    legacy = root / "lsbpipe-project.json"
+    old = {
+        "schema": "lsbpipe.local-project/0.1",
+        "field": {"ra_deg": FIELD.ra_deg, "dec_deg": FIELD.dec_deg,
+                  "width_arcmin": FIELD.width_arcmin},
+        "selected": ["dr9", "north", "0401p012", "r"],
+        "target_radius_arcsec": 35.,
+        "sky_inner_arcsec": 65.,
+        "sky_outer_arcsec": 110.,
+    }
+    legacy.write_text(json.dumps(old), encoding="utf-8")
+    before = legacy.read_bytes()
+    project = import_object_project(root)
+    assert (project.target_radius_arcsec, project.sky_inner_arcsec,
+            project.sky_outer_arcsec) == (35., 65., 110.)
+    assert legacy.read_bytes() == before
+    again = read_object_project(root)
+    assert (again.target_radius_arcsec, again.sky_inner_arcsec,
+            again.sky_outer_arcsec) == (35., 65., 110.)
+
+
+def test_authoritative_object_target_and_dataset_override_stale_legacy(tmp_path):
+    from lsbpipe.surveys.local_project import open_local_project
+    root = tmp_path / "UGC_2162"
+    data = _old_folder(root)
+    legacy = root / "lsbpipe-project.json"
+    legacy.write_text(json.dumps({
+        "schema": "lsbpipe.local-project/0.1",
+        "field": {"ra_deg": 40.096208, "dec_deg": 1.22925,
+                  "width_arcmin": 5.0},
+        "selected": ["dr9", "north", "0401p012", "r"],
+    }), encoding="utf-8")
+    object_record = import_object_project(root)
+    updated_field = SkyField(40.101234, 1.225678, 6.)
+    object_record.field = updated_field
+    object_record.selected_dataset = ("dr9", "south", "0401p012", "r")
+    object_record.target_radius_arcsec = 35.
+    object_record.sky_inner_arcsec = 65.
+    object_record.sky_outer_arcsec = 110.
+    save_object_project(object_record)
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    inventory = open_local_project(
+        data, authoritative_field=object_record.field,
+        authoritative_selected=object_record.selected_dataset)
+    assert inventory.field == updated_field
+    assert inventory.field_source == "object-project"
+    assert inventory.selected == object_record.selected_dataset
+    assert inventory.hits[0].ra1 == updated_field.ra_deg
+    assert legacy.read_bytes() == before[legacy]
+    assert all(p.read_bytes() == content for p, content in before.items())
+    # Older standalone imports still behave exactly as before.
+    older = open_local_project(root)
+    assert older.field == FIELD
+    assert older.selected == ("dr9", "north", "0401p012", "r")
+
+
+def test_stale_object_dataset_falls_back_to_local_inventory_not_old_selection(
+        tmp_path):
+    from lsbpipe.surveys.local_project import open_local_project
+    root = tmp_path / "UGC_2162"
+    _old_folder(root)
+    legacy = root / "lsbpipe-project.json"
+    legacy.write_text(json.dumps({
+        "schema": "lsbpipe.local-project/0.1",
+        "field": {"ra_deg": FIELD.ra_deg, "dec_deg": FIELD.dec_deg,
+                  "width_arcmin": FIELD.width_arcmin},
+        "selected": ["dr9", "south", "0401p012", "r"],
+    }), encoding="utf-8")
+    requested = ("dr9", "south", "9999p999", "r")
+    inventory = open_local_project(
+        root, authoritative_field=FIELD, authoritative_selected=requested)
+    assert inventory.selected in inventory.complete
+    assert inventory.selected != requested
+    assert inventory.selected != ("dr9", "south", "0401p012", "r")
