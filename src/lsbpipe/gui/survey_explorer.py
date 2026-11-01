@@ -791,17 +791,33 @@ class SurveyExplorer(QMainWindow):
             row = next(
                 (i for i, hit in enumerate(self.hits) if chosen and
                  (hit.release, hit.region, hit.name) == chosen[:3]), 0)
-            if self.hits:
+            unavailable_selection = bool(
+                self._object_project is not None
+                and self._object_project.selected_dataset is not None
+                and chosen != self._object_project.selected_dataset)
+            if self.hits and not unavailable_selection:
                 self.bricks.selectRow(row)
                 if chosen and chosen[3] in self.hits[row].median_exposures:
                     self.science_qa.band.setCurrentText(chosen[3])
                 hit = self.hits[row]
                 project.selected = (hit.release, hit.region, hit.name,
                                     self.science_qa.current_band())
+            elif unavailable_selection:
+                # Inventory fallback is informational, not a new scientific
+                # selection. Require a deliberate row choice before QA/save.
+                self.bricks.clearSelection()
+                self.science_qa.set_selected_hit(None)
             self._mark_local_files()
+            if unavailable_selection:
+                self.project_status.setText(
+                    "Saved dataset missing from original FITS inventory. "
+                    "Choose a present brick deliberately; the stored "
+                    "selection has not been changed.")
             self.target_hint.setText(
                 f"Local ICRS target from {project.field_source}; no archive search")
             self.message.setText(
+                "Saved dataset unavailable: select a present brick before QA."
+                if unavailable_selection else
                 f"Restored {project.root.name} from existing original FITS. "
                 "Run Science QA without downloading again.")
             self.preview_label.setText(
