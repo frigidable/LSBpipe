@@ -372,9 +372,21 @@ class FITSExplorer(QWidget):
         kind = self.layer.currentData()
         if kind not in ("image", "invvar", "nexp"):
             return
+        low_text, high_text = self.vmin.text().strip(), self.vmax.text().strip()
+        # Both empty fields mean "automatic", as the placeholders indicate.
+        # Previously pressing Apply on untouched fields produced an opaque
+        # float('') exception while the full-resolution image was still loading.
+        if not low_text and not high_text:
+            self._auto_display_range()
+            return
+        if not low_text or not high_text:
+            self.range_info.setText(
+                "Enter both numeric vmin/vmax limits, or leave both blank "
+                "and use Auto range.")
+            return
         try:
-            lo = float(self.vmin.text().strip())
-            hi = float(self.vmax.text().strip())
+            lo = float(low_text)
+            hi = float(high_text)
             _, accepted = transfer_settings(
                 kind, scaling=self.scaling.currentData(), limits=(lo, hi))
         except (ValueError, TypeError) as exc:
