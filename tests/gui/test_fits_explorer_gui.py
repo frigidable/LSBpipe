@@ -311,3 +311,17 @@ def test_empty_positive_log_layer_hides_colorbar_without_lying(explorer):
     assert "log unavailable" in explorer.range_info.text()
     assert (explorer.scale_bar.pixmap() is None or
             explorer.scale_bar.pixmap().isNull())
+
+
+def test_blank_manual_display_limits_are_auto_not_float_conversion_error(
+        explorer):
+    # The real Windows FITS view initially has empty vmin/vmax placeholders.
+    explorer.vmin.setText("")
+    explorer.vmax.setText("")
+    explorer._apply_display_range()
+    assert "could not convert string" not in explorer.range_info.text()
+    assert "image" not in explorer._manual_ranges
+    explorer.vmin.setText("1.5")
+    explorer._apply_display_range()
+    assert "Enter both numeric" in explorer.range_info.text()
+    assert "image" not in explorer._manual_ranges
