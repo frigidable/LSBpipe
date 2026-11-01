@@ -240,8 +240,9 @@ def verify_dataset(data_root: str | Path, entry: dict, *,
                     "Original coadd correlated noise is not inferred from INVVAR",
                 ],
             })
-    except (OSError, ValueError, RuntimeError, TypeError, IndexError,
-            KeyError, AssertionError) as exc:
+    except Exception as exc:
+        # Corrupt FITS/astropy verification errors are per-dataset failures,
+        # not a reason to discard every other independently audited quartet.
         result.update({
             "status": "INVALID_FITS",
             "error": f"{type(exc).__name__}: {exc}",
@@ -347,6 +348,32 @@ def _sampled_footprint(data_root: Path, verified: list[dict], field: SkyField,
     return reports
 
 
+def assert_audited_inputs_unchanged(data_root: str | Path,
+                                    records: list[dict]) -> None:
+    """Fail closed when any verified FITS changed before receipt publication.
+
+    A second hash prevents an audit from combining an old verification with
+    a later edited pixel raster. Mere equality of file size is insufficient.
+    """
+    root = Path(data_root).expanduser().resolve()
+    for record in records:
+        if record["status"] != "FITS_WCS_VALIDATED_DIAGNOSTIC":
+            continue
+        for product in record["products"].values():
+            file = root / product["relative_path"]
+            try:
+                info = _sha256_file(file)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Verified source disappeared before audit completion: {file}") from exc
+            if (info["sha256_local"] != product["sha256_local"] or
+                    info["size_bytes"] != product["size_bytes"] or
+                    info["mtime_ns"] != product["mtime_ns"]):
+                raise RuntimeError(
+                    "Original FITS changed while dataset audit was running: "
+                    + str(file))
+
+
 def audit_dataset_root(data_root: str | Path, *, field: SkyField | None = None,
                        pitch_arcsec: float = 2.0, max_datasets: int = MAX_DATASETS,
                        progress=None) -> dict:
@@ -362,6 +389,7 @@ def audit_dataset_root(data_root: str | Path, *, field: SkyField | None = None,
         records.append(verify_dataset(root, entry))
     groups = _sampled_footprint(
         root, records, field, pitch_arcsec=pitch_arcsec) if field else []
+    assert_audited_inputs_unchanged(root, records)
     failures = sum(e["status"] in ("INVALID_FITS", "EMPTY_FILE",
                                    "INCOMPLETE_FILES", "ORPHAN_MASKBITS")
                    for e in records)
