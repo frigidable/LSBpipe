@@ -85,6 +85,9 @@ class ObjectProject:
     last_opened_at: str = dc_field(default_factory=_now)
     last_science: dict = dc_field(default_factory=dict)
     catalog_match: dict | None = None
+    target_radius_arcsec: float = 60.
+    sky_inner_arcsec: float = 90.
+    sky_outer_arcsec: float = 180.
 
     @property
     def status(self) -> str:
@@ -110,6 +113,12 @@ def _validate(project: ObjectProject) -> None:
     if project.catalog_match is not None and not isinstance(
             project.catalog_match, dict):
         raise ValueError("Invalid external catalog association")
+    if not all(math.isfinite(v) for v in (
+            project.target_radius_arcsec, project.sky_inner_arcsec,
+            project.sky_outer_arcsec)) or not (
+            0 < project.target_radius_arcsec <= project.sky_inner_arcsec
+            < project.sky_outer_arcsec <= 1200):
+        raise ValueError("Invalid project radii: require 0 < target <= inner < outer <= 1200")
 
 
 def project_path(root: str | Path) -> Path:
@@ -152,6 +161,9 @@ def save_object_project(project: ObjectProject) -> Path:
         "last_opened_at": project.last_opened_at,
         "last_science": project.last_science,
         "catalog_match": project.catalog_match,
+        "target_radius_arcsec": project.target_radius_arcsec,
+        "sky_inner_arcsec": project.sky_inner_arcsec,
+        "sky_outer_arcsec": project.sky_outer_arcsec,
         "status": project.status,
         "science_status": "DIAGNOSTIC_NOT_ADOPTED",
     })
@@ -189,7 +201,10 @@ def read_object_project(root: str | Path) -> ObjectProject:
         created_at=str(info.get("created_at", "")),
         last_opened_at=str(info.get("last_opened_at", "")),
         last_science=info.get("last_science") or {},
-        catalog_match=info.get("catalog_match"))
+        catalog_match=info.get("catalog_match"),
+        target_radius_arcsec=float(info.get("target_radius_arcsec", 60.)),
+        sky_inner_arcsec=float(info.get("sky_inner_arcsec", 90.)),
+        sky_outer_arcsec=float(info.get("sky_outer_arcsec", 180.)))
     _validate(project)
     return project
 
@@ -291,7 +306,10 @@ def import_object_project(directory: str | Path, *,
         display_name=display_name or prior.root.name, root=prior.root,
         data_root=prior.data_root, field=prior.field,
         target_source=prior.field_source, selected_dataset=prior.selected,
-        last_science=prior.last_science)
+        last_science=prior.last_science,
+        target_radius_arcsec=prior.target_radius_arcsec,
+        sky_inner_arcsec=prior.sky_inner_arcsec,
+        sky_outer_arcsec=prior.sky_outer_arcsec)
     save_object_project(project)
     register_object_project(project)
     return project
