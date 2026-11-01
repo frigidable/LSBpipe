@@ -225,3 +225,47 @@ def test_empty_galaxy_qa_radii_are_persisted_without_fits(hub, tmp_path):
     assert (reopened.target_radius.value(), reopened.sky_inner.value(),
             reopened.sky_outer.value()) == (35., 65., 110.)
     reopened._go_back_to_projects()
+
+
+def test_missing_saved_dataset_requires_explicit_new_selection(
+        hub, tmp_path):
+    import json
+    from lsbpipe.surveys.legacy import BrickHit, product_for
+    from lsbpipe.surveys.object_projects import (
+        import_object_project, save_object_project)
+    root = tmp_path / "UGC_2162"
+    data = root / "data"
+    hit = BrickHit("dr9", "south", "0401p012", 0, 0, 0, 0, {"r": 1})
+    for kind in ("image", "invvar", "nexp", "maskbits"):
+        product = product_for(
+            hit, kind, None if kind == "maskbits" else "r")
+        path = data / product.relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"read only")
+    (data / "download-report.json").write_text(json.dumps({
+        "schema": "lsbpipe.legacy-download-report/0.1",
+        "field": {"ra_deg": 40.096208, "dec_deg": 1.22925,
+                  "width_arcmin": 5.0},
+    }), encoding="utf-8")
+    project = import_object_project(root)
+    missing = ("dr9", "north", "0401p012", "r")
+    project.selected_dataset = missing
+    save_object_project(project)
+    with offline_legacy_viewer():
+        hub._enter_project(project)
+    w = hub.workspace
+    assert w is not None
+    assert w.bricks.rowCount() == 1
+    assert not w.bricks.selectedItems()
+    assert "Saved dataset missing" in w.project_status.text()
+    w._go_back_to_projects()
+    assert read_object_project(root).selected_dataset == missing
+
+    # Only deliberate row selection changes the object passport.
+    with offline_legacy_viewer():
+        hub._enter_project(read_object_project(root))
+    w = hub.workspace
+    w.bricks.selectRow(0)
+    w._go_back_to_projects()
+    assert read_object_project(root).selected_dataset == (
+        "dr9", "south", "0401p012", "r")
