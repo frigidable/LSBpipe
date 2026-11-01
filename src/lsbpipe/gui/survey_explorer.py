@@ -1884,7 +1884,6 @@ class SurveyExplorer(QMainWindow):
 
 
 def main():
-    app = QApplication.instance() or QApplication([])
-    window = SurveyExplorer()
-    window.show()
-    return app.exec()
+    """Console script uses the same Project Hub as python -m lsbpipe.gui."""
+    from .project_hub import main as launch_hub
+    return launch_hub()
