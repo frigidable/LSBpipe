@@ -962,6 +962,13 @@ class SurveyExplorer(QMainWindow):
         if row < 0 or row >= len(self.hits):
             return
         hit = self.hits[row]
+        if self._local_project is not None:
+            # No fictional brick centers from placeholder coordinates.
+            self.message.setText(
+                "This project was restored from local filenames only; "
+                "official brick geometry is unavailable offline. "
+                "Use Show target for the known ICRS position.")
+            return
         mid_ra = (hit.ra1 + ((hit.ra2-hit.ra1) % 360.)/2.) % 360.
         mid_dec = (hit.dec1 + hit.dec2) / 2.
         field_width = self._validated_field()
@@ -1372,6 +1379,12 @@ class SurveyExplorer(QMainWindow):
         if not selected:
             QMessageBox.warning(self, "Nothing selected", "Select at least one product.")
             return
+        if self._local_project is not None and selected.issubset(
+                self._local_project.on_disk):
+            self.message.setText(
+                f"All {len(selected)} selected science products already "
+                "exist locally. No network download was attempted.")
+            return
         report = summarize_selection(self.manifest["products"], selected)
         amount = (f"Known size: {report.known_mib:.1f} MiB" +
                   (f" + {report.unknown_size_files} unknown-sized files."
@@ -1389,7 +1402,9 @@ class SurveyExplorer(QMainWindow):
                 QMessageBox.No) != QMessageBox.Yes:
             return
         directory = QFileDialog.getExistingDirectory(
-            self, "Choose the science data directory", str(Path.home()))
+            self, "Choose the science data directory",
+            str(self._local_project.data_root if self._local_project
+                else Path.home()))
         if not directory:
             return
         manifest = json.loads(json.dumps(self.manifest))
@@ -1497,6 +1512,11 @@ class SurveyExplorer(QMainWindow):
         if failures:
             QMessageBox.warning(self, "Incomplete download",
                 f"{failures} files failed. Inspect download-report.json.")
+        if successes and self._last_download_root:
+            # Completed downloads are immediately reusable as a local
+            # project, preserving the target instead of restarting discovery.
+            self._manual_target_edited = True
+            self._open_local_project_folder(self._last_download_root)
 
     def _on_science_context_changed(self, *_):
         self._qa_generation += 1
