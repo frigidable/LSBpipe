@@ -22,6 +22,8 @@ from PySide6.QtGui import QFont, QFontInfo, QFontDatabase
 from PySide6.QtWidgets import QApplication, QGroupBox, QTableWidget
 
 from lsbpipe.gui.survey_explorer import SurveyExplorer
+from lsbpipe.gui.project_hub import ProjectHub
+from lsbpipe.surveys.object_projects import create_object_project
 
 
 SIZES = ((1366, 768), (1600, 900), (1920, 1080))
@@ -186,6 +188,42 @@ def main():
     # No Viewer navigation or archive activity from this controlled
     # capture process. The application source itself is NOT modified.
     reports = []
+    # Isolate launcher registry even when this script runs outside pytest:
+    # GUI evidence must NEVER alter the real user's recent-project index.
+    os.environ["LSBPIPE_SESSION_DIR"] = str(outdir.resolve() / ".session")
+    from lsbpipe.surveys.object_projects import library_index_path
+    fixture_root = outdir.resolve() / "test-project"
+    with offline_legacy_viewer():
+        hub = ProjectHub()
+        try:
+            for w, h in SIZES:
+                hub.resize(w, h)
+                hub.show()
+                app.processEvents()
+                path = outdir / f"hub_empty_{w}x{h}.png"
+                if not hub.grab().save(str(path), "PNG"):
+                    raise RuntimeError(f"Could not capture {path}")
+                reports.append({
+                    "state": "H0_empty_library_offline", "screenshot": path.name,
+                    "screenshot_bytes": path.stat().st_size,
+                    "network_used": False, "scientific_status": "NO_SCIENCE_RESULT"})
+            create_object_project("UGC 2162 · synthetic library entry", fixture_root)
+            hub.refresh()
+            for w, h in SIZES:
+                hub.resize(w, h)
+                hub.show()
+                app.processEvents()
+                path = outdir / f"hub_recent_{w}x{h}.png"
+                if not hub.grab().save(str(path), "PNG"):
+                    raise RuntimeError(f"Could not capture {path}")
+                reports.append({
+                    "state": "H1_recent_project_offline",
+                    "screenshot": path.name,
+                    "screenshot_bytes": path.stat().st_size,
+                    "network_used": False, "scientific_status": "NO_SCIENCE_RESULT"})
+        finally:
+            hub.close()
+        assert library_index_path().is_file()
     # Fresh widget instance for every state: no inadvertent selection/resize
     # carryover between screenshots, but all components are real Qt widgets.
     with offline_legacy_viewer():
