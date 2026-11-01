@@ -135,11 +135,15 @@ def test_import_older_qa_record_by_exact_context_not_arbitrary_latest(tmp_path):
             "release": "dr9", "region": "south",
             "brick": "0401p012", "band": "r", "action": "figure",
             "ra_deg": FIELD.ra_deg, "dec_deg": FIELD.dec_deg,
-            "width_arcmin": FIELD.width_arcmin}}
+            "width_arcmin": FIELD.width_arcmin,
+            "target_radius_arcsec": 35., "sky_inner_arcsec": 65.,
+            "sky_outer_arcsec": 110.}}
     (qa / "manifest.json").write_text(json.dumps(receipt))
     (qa / "four-layers.png").write_bytes(b"synthetic")
     result = open_local_project(root)
     assert result.last_science["action"] == "figure"
+    assert (result.target_radius_arcsec, result.sky_inner_arcsec,
+            result.sky_outer_arcsec) == (35., 65., 110.)
     assert result.last_science["path"] == str(qa / "four-layers.png")
     receipt["context"]["ra_deg"] = 31.
     (qa / "manifest.json").write_text(json.dumps(receipt))
