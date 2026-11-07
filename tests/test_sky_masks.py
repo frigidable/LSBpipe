@@ -123,3 +123,26 @@ def test_edit_serialization_immutable_revision_and_digest():
         later.with_edit(later.edits[0])
     with pytest.raises(ValueError):
         SkyMaskDraft.from_dict({**later.to_dict(), "status": "SCIENCE_READY"})
+
+
+def test_icrs_ellipse_area_mirror_symmetry_and_chunk_invariance():
+    """A PSF/sky mask's physical footprint cannot depend on the FITS x handedness."""
+    shape = SkyMaskShape(
+        "ellipse", (359.9995, .1), a_arcsec=9., q=.45, pa_deg=35.)
+    first = rasterize_sky_shape(
+        shape, _wcs(), (51, 51), subpixels=4, row_chunk=7)
+    same_different_chunks = rasterize_sky_shape(
+        shape, _wcs(), (51, 51), subpixels=4, row_chunk=51)
+    mirrored = rasterize_sky_shape(
+        shape, _wcs(mirrored=True), (51, 51), subpixels=4, row_chunk=11)
+    expected_sky_area_arcsec2 = np.pi * 9.**2 * .45
+    assert np.array_equal(first, same_different_chunks)
+    assert np.all((first >= 0.) & (first <= 1.))
+    assert np.any((first > 0.) & (first < 1.))
+    # The WCS fixtures have 1-arcsec pixels. An ellipse's sky area and
+    # fractional occupancy must agree regardless of mirrored x orientation.
+    assert first.sum() == pytest.approx(expected_sky_area_arcsec2, rel=.03)
+    assert mirrored.sum() == pytest.approx(expected_sky_area_arcsec2, rel=.03)
+    assert first.sum() == pytest.approx(mirrored.sum(), rel=.02)
+    assert first[25, 25] == pytest.approx(1.)
+    assert mirrored[25, 25] == pytest.approx(1.)

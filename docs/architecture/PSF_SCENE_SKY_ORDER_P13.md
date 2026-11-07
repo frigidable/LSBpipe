@@ -314,9 +314,10 @@ Validate both scientific and UX behavior:
    cutout sky, recipe, coadd/CCD and local position;
 4. no new automatic downloads, source-FITS writes or claimed science
    products from opening the Photometry Workspace;
-5. when implemented, test global/local/spatial PSF on holdout stars;
-   compare with NGC2146sat legacy empirical PSFs, then UGC 2162 and
-   crowded/bright-star/PSF-sparse fields;
+5. first run the Leo P control on its validated local DR11 South source;
+   inspect held-out stars and core/wing QA, then compare methodologically
+   with the older NGC2146sat empirical PSFs as a secondary control;
+   subsequently UGC 2162 and crowded/bright-star/PSF-sparse fields;
 6. use injection-recovery for recovered galaxy magnitude, R_e, n,
    mu_0, color gradients and SBF when appropriate.
 
@@ -324,8 +325,10 @@ Validate both scientific and UX behavior:
 
 - P1.3a: this architecture, conditional dependency contract and GUI
   stage order; no fitted sky/PSF or photometry claimed.
-- PSF-0: independent empirical coadd PSF per band, robust star
-  selection, cutout-sky fit, provenance/QA and two-dimensional FITS.
+- PSF-0: Leo P is the **first** real control; construct an independent
+  empirical coadd PSF per available band, review star selection,
+  cutout-sky fit, provenance/QA and two-dimensional diagnostic FITS.
+  NGC2146sat remains a **second** comparison baseline.
 - P1.2b: research-quality FITS mask editor with provisional masks,
   sky-coordinate linked edits, undo/redo and review.
 - PSF-1: local/global/spatial evaluation + CCD PSFEx adapter with
@@ -358,3 +361,101 @@ Future review should also examine Anderson & King (2000) ePSF,
 AutoProf, elderflower wide-angle PSFs and injection-recovery work
 before selecting exact solvers. Bibliographic discussion does **not**
 by itself validate a PSF implementation.
+
+
+## 2026-11-06 amendment: mandatory empirical PSF in every optical science band
+
+**New non-negotiable researcher requirement:** Desidera must obtain and
+scientifically validate an **empirical, observed-star-derived effective PSF
+for every band being used in subsequent galaxy photometry**, with no
+filter-specific exceptions. In the Leo P DR11 south native coadd analysis
+this means **g, r, i and z**; a scientifically incomplete `g`
+means **all-band galaxy photometry cannot start**. The current r/i/z
+PSF-0 reconstructions remain `EXPERIMENTAL_PSF_NOT_ADOPTED` and
+also **cannot** satisfy the gate. A diagnostic coverage report, a
+numerically converged PSF, or a PSFSIZE seeing estimate do not satisfy
+the scientific requirement. The prior pilot's honest `g` refusal
+closes **only a diagnostic experiment matrix**, not the empirical PSF
+development objective.
+
+Define the required input to a future numerical photometry executor
+as one *trusted internal science receipt per exact band/observational
+dataset*, recording:
+- empirical origin from **observed stellar pixels in that band**;
+- relevant coadd/CCD observation lineage and verified original hashes;
+- properly normalized final model with explicit immutable kernel hash;
+- independent stellar evidence (at least 3 Gaia-identified holdouts in
+  the current primary policy), extended-wing validation, spatial
+  representativity, stellar/sky separability, correlated coadd noise QA;
+- explicit **scientific adoption** distinct from experimental preview.
+
+`inspect_empirical_psf_coverage` and
+`require_empirical_psf_coverage` in
+`src/lsbpipe/photometry/workflow_dependencies.py` express the
+**fail-closed planning/entry contract** for later photometric execution.
+They accept only future *trusted* internally verified science receipts;
+the contract cannot authenticate arbitrary user-entered dictionaries
+or replace the actual measurement QA. There is **no numerical
+photometry executor yet** to invoke this guard, so these additions
+must not be misrepresented as scientific validation or as a
+retroactive upgrade of PSF-0. Subsequent executor implementation
+**must invoke the guard before any scientific measurement is written**.
+
+An external single-CCD PSFEx kernel, a Gaussian from PSFSIZE, and
+an uncalibrated analytically imposed Moffat profile are **not
+acceptable substitutes** for the mandated empirical coadd PSF.
+PSFEx and analytical shapes remain useful for benchmark comparisons,
+initialization and contamination models; the *final* adopted PSF
+must be constrained and independently verified by real observed
+stars in the required filter and observational product.
+
+### How to recover the missing Leo P g-band stellar PSF without fake passes
+
+**Priority 1 — improve the sample selection, not the acceptance cut.**
+Read the complete `g` Gaia/Tractor first-failure inventory (972
+screened). Specifically inspect *Gaia-confirmed* sources rejected by
+the 85-pixel isolation condition or source-neighbour tests, rather than
+reclassifying rejected Tractor galaxy models as stars. For each
+candidate inspect native cutouts, weighted segmentation and companion
+flux; assess whether *PSF-model-based neighbour subtraction or
+neighbour-only masking* leaves a clean, symmetric stellar core and
+sufficient azimuthal coverage for the 30–38-pixel local-sky
+annulus. Any new neighbour-aware regime must be independently
+versioned, predeclared, and verified using **g-only stellar pixels**
+and fixed heldouts; modified acceptance criteria are never
+retrospectively compared as if the same recipe.
+
+**Priority 2 — leverage more observed g-band star pixels while
+preserving coadd compatibility.** Explore supplementary DR11 nearby
+brick data **only** when the contributing exposure mix, seeing,
+position and coadd resampling can be shown to support transferring
+or spatially interpolating the empirical PSF to Leo P. Do not claim
+adjacent-brick PSFs are automatically interchangeable. For severe
+star scarcity consider observing-frame/CCD-based **empirical**
+per-exposure ePSFs, transformed and combined using actual
+coadd weights and astrometry to obtain the effective g-band
+PSF at the target. Validate that synthesized coadd-equivalent
+kernel with stars from the **actual target coadd**, or report
+unvalidated transfer and continue blocking photometry.
+
+**Priority 3 — transparent nonstandard validation if samples remain
+sparse.** Leave-one-star-out or K-fold refitting can provide
+cross-fitted diagnostics of star-derived g PSF stability, but these
+folds **do not magically supply three independent Gaia holdouts
+of the final all-stars model** and cannot be silently counted as
+the original 10-train+3-heldout gate. Any alternative policy must
+define a separate statistically justified validation contract,
+include injection/sky/covariance tests and be explicitly reviewed
+before becoming eligible for scientific adoption.
+
+If real g observations cannot support a scientifically validated
+empirical coadd-effective PSF by any supported path, the pipeline
+must continue to **block scientific galaxy photometry** and clearly
+record why. The requirement does not imply that a trustworthy
+PSF can be mathematically guaranteed in arbitrary poor-quality
+data; it implies that missing PSF can never be silently ignored.
+
+Primary sources: Legacy DR11 PSF and CCD-model description at
+https://www.legacysurvey.org/dr11/description/ and Photutils
+`EPSFBuilder` at
+https://docs.astropy.org/projects/photutils/en/stable/user_guide/epsf_building.html.

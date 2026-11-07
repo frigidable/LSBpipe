@@ -183,7 +183,7 @@ class SurveyExplorer(QMainWindow):
         self.dataset_manager_btn.clicked.connect(self._open_dataset_manager)
         self.dataset_manager_btn.setVisible(False)
         panel.addWidget(self.dataset_manager_btn)
-        self.photometry_btn = QPushButton("Photometry · preparation")
+        self.photometry_btn = QPushButton("Photometry · PSF workspace")
         self.photometry_btn.setObjectName("workspace_open_photometry")
         self.photometry_btn.setToolTip(
             "Open the separate scientific photometry screen for this galaxy. "
@@ -674,6 +674,17 @@ class SurveyExplorer(QMainWindow):
             self._leave_photometry)
         self.photometry_workspace.sourcesRequested.connect(
             self._open_dataset_manager)
+        self.photometry_workspace.psf0RunRequested.connect(
+            self._run_project_psf0)
+        self.photometry_workspace.psf0SaveRequested.connect(
+            self._save_project_psf0)
+        self.photometry_workspace.psf0AutoFwhmRequested.connect(
+            self._suggest_project_psf0_fwhm)
+        self.photometry_workspace.psf0TractorRequested.connect(
+            self._acquire_project_psf0_tractor)
+        from lsbpipe.gui.psf0_batch_controller import launch as launch_psf0_batch
+        self.photometry_workspace.psf0BatchRequested.connect(
+            lambda request: launch_psf0_batch(self, request))
         self.preview_tabs.currentChanged.connect(self._preview_tab_changed)
         preview_layout.addWidget(self.preview_tabs, 1)
         self.workspace_split = split
@@ -785,6 +796,166 @@ class SurveyExplorer(QMainWindow):
             self.preview_tabs.addTab(self.photometry_workspace, "Photometry")
         self.preview_tabs.setCurrentWidget(self.photometry_workspace)
         self.data_drawer.hide()
+
+    def _run_project_psf0(self, request):
+        """Dispatch genuine Leo P native-band ePSF in the existing GUI thread pool."""
+        from dataclasses import replace
+        from lsbpipe.photometry.psf_gui_backend import (
+            run_gui_psf0, psf0_experiment_recipe,
+            commit_psf0_manual_review,
+        )
+
+        panel = self.photometry_workspace.psf0_panels.get(
+            str(request.get("band")), self.photometry_workspace.psf0_panel)
+        if self.thread is not None:
+            panel.status.setText("Another workspace task is active. "
+                                 "Finish or stop it before starting PSF-0.")
+            return
+        if self._object_project is None or request.get("project_root") != str(self._object_project.root):
+            panel.show_failure("Leo P project identity changed before PSF dispatch")
+            return
+        try:
+            base_config = psf0_experiment_recipe(
+                float(request["fwhm_pix"]), str(request["experiment"]))
+            excluded = tuple(request.get("excluded_training_star_ids", ()))
+            config = replace(
+                base_config, excluded_training_star_ids=excluded,
+                star_catalog_policy=str(
+                    request.get("star_catalog_policy", "dao_diagnostic")))
+            manual_confirmed = request.get("manual_review_confirmed") is True
+            band = str(request["band"])
+            radius = float(request["target_protection_arcsec"])
+            root = str(self._object_project.root)
+        except (ValueError, TypeError, KeyError) as exc:
+            panel.show_failure(f"Invalid PSF-0 settings: {exc}")
+            return
+
+        def run(progress):
+            payload = run_gui_psf0(
+                root, band=band, config=config,
+                protection_arcsec=radius, progress=progress)
+            if manual_confirmed:
+                payload["manual_review_receipt"] = commit_psf0_manual_review(
+                    payload, explicitly_confirmed=True)
+            return payload
+
+        def finished(payload):
+            if payload.get("status") == "PSF0_QUALITY_REJECTED_NOT_ADOPTED":
+                panel.show_quality_rejection(payload)
+                self.message.setText(
+                    f"PSF-0 {band} REJECTED by scientific QA. "
+                    "Inspect negative ringing and candidate stars in Photometry.")
+            else:
+                panel.show_result(payload)
+                self.message.setText(
+                    f"PSF-0 {band} completed as EXPERIMENTAL_NOT_ADOPTED. "
+                    "Review holdout stars and QA before saving a diagnostic.")
+            if payload.get("manual_review_receipt"):
+                panel.show_review_saved(payload["manual_review_receipt"])
+
+        def failed(message):
+            panel.show_failure(message)
+
+        self._start(run, finished, failed, operation_name="psf0-preview")
+        if self.thread is not None:
+            panel.set_busy(True, "PSF-0 running on saved original FITS. "
+                           "No science result will be adopted.")
+
+    def _acquire_project_psf0_tractor(self, request):
+        """Explicit official native Gaia/Tractor FITS download in current project."""
+        from lsbpipe.photometry.psf_gui_backend import acquire_gui_psf0_tractor
+        panel = self.photometry_workspace.psf0_panels.get(
+            str(request.get("band")), self.photometry_workspace.psf0_panel)
+        if self.thread is not None:
+            panel.status.setText("Finish the active task before acquiring Gaia data.")
+            return
+        if (self._object_project is None or
+                request.get("project_root") != str(self._object_project.root)):
+            panel.status.setText("Leo P project changed. Reopen Photometry.")
+            return
+        root = str(self._object_project.root)
+        def run(progress):
+            return acquire_gui_psf0_tractor(root, progress=progress)
+        def finished(payload):
+            panel.show_tractor_acquired(payload)
+            self.message.setText(
+                "Original DR11 Tractor/Gaia catalogue verified in current "
+                "Leo P project. PSF has NOT been rebuilt or adopted.")
+        def failed(message):
+            panel.status.setText(
+                "DR11 Tractor/Gaia catalogue unavailable or invalid: "
+                + message + ". No automatic DAO fallback was used.")
+        self._start(run, finished, failed,
+                    operation_name="psf0-native-tractor-gaia")
+        if self.thread is not None:
+            panel.set_busy(True, "Fetching original DR11 Tractor+Gaia "
+                           "source catalogue on explicit user request.")
+
+    def _suggest_project_psf0_fwhm(self, request):
+        """Use existing project native WCS and local optional PSFSIZE map."""
+        from lsbpipe.photometry.psf_gui_backend import suggest_gui_psf0_fwhm
+        panel = self.photometry_workspace.psf0_panels.get(
+            str(request.get("band")), self.photometry_workspace.psf0_panel)
+        if self.thread is not None:
+            panel.status.setText("Workspace task active; finish it before PSFSIZE lookup")
+            return
+        if (self._object_project is None or
+                request.get("project_root") != str(self._object_project.root)):
+            panel.status.setText("Leo P project changed. Reopen Photometry.")
+            return
+        band, root = request["band"], str(self._object_project.root)
+        def run(progress):
+            return suggest_gui_psf0_fwhm(
+                root, band=band, progress=progress)
+        def finished(payload):
+            panel.show_fwhm_suggestion(payload)
+        def failed(message):
+            detail = (
+                "Local DESI PSFSIZE cannot be verified: " + message
+                + ". Initial FWHM guess unchanged; inspect the exact "
+                "coadd PSFSIZE map or original Tractor PSFSIZE band "
+                "column in the active Leo P project.")
+            panel.status.setText(detail)
+            panel.prior_source.setText(detail)
+        self._start(run, finished, failed, operation_name="psf0-seeing-prior")
+        if self.thread is not None:
+            panel.set_busy(True, "Checking original FITS WCS and optional "
+                           "DESI PSFSIZE seeing map (no download).")
+
+    def _save_project_psf0(self, preview):
+        """User requested an immutable derivative; recheck original FITS first."""
+        from lsbpipe.photometry.psf_gui_backend import save_gui_psf0
+
+        band = (str(preview.get("review_band")) if preview.get("review_band")
+                else str(preview["result"].dataset_id.rsplit("/", 1)[-1])
+                if preview.get("result") is not None else "")
+        panel = self.photometry_workspace.psf0_panels.get(
+            band, self.photometry_workspace.psf0_panel)
+        if self.thread is not None:
+            panel.status.setText("Another workspace task is active; save was not started.")
+            return
+        if self._object_project is None or (
+                preview.get("project_root") != str(self._object_project.root)):
+            panel.status.setText(
+                "Project changed since PSF preview. Rerun before diagnostic export.")
+            return
+
+        def run(progress):
+            return save_gui_psf0(preview, progress=progress)
+
+        def finished(path):
+            panel.show_saved(path)
+            self.message.setText("Immutable, non-adopted PSF-0 diagnostic saved: " + path)
+
+        def failed(message):
+            panel.status.setText(
+                "Could not save diagnostic; preview is still experimental.")
+            panel.qa.appendPlainText("\nDiagnostic export failed: " + message)
+
+        self._start(run, finished, failed, operation_name="psf0-export")
+        if self.thread is not None:
+            panel.set_busy(True, "Verifying original FITS SHA-256 before "
+                           "explicit diagnostic export.")
 
     def _leave_photometry(self):
         if self.fits_explorer._dataset is not None:
@@ -1376,8 +1547,8 @@ class SurveyExplorer(QMainWindow):
         if photometry_active:
             self.workflow_stage.setText("03 / 04 · Photometry")
             self.workflow_hint.setText(
-                "Read-only input preparation. No photometric science run "
-                "is implemented or adopted on this screen.")
+                "Experimental PSF-0 preview available for saved Leo P FITS; "
+                "no sky, galaxy photometry or science adoption.")
         self.data_toggle.setText(
             "02 · Get original FITS" if has_catalog and not local_available
             else "Data & diagnostics")
@@ -1620,7 +1791,10 @@ class SurveyExplorer(QMainWindow):
     def _idle(self):
         # This callback is invoked only after the GUI terminal delivery
         # and QThread shutdown have both been acknowledged.
-        return self._task_controller.idle()
+        result = self._task_controller.idle()
+        if hasattr(self, "photometry_workspace"):
+            self.photometry_workspace.set_psf_busy(False)
+        return result
 
     def _progress(self, item):
         if isinstance(item, tuple):
@@ -1992,6 +2166,16 @@ class SurveyExplorer(QMainWindow):
         self._refresh_workflow()
 
     def _preview_tab_changed(self, tab):
+        # The project/coordinates sidebar remains a stable navigation
+        # anchor even inside Photometry. Removing it forced the scientific
+        # controls to stretch across the whole screen and hid the user's
+        # familiar path back to the dataset browser. Preserve the original
+        # sidebar and tabs, but suppress the redundant remote-sky heading.
+        photometry_active = (
+            self.preview_tabs.currentWidget() is self.photometry_workspace)
+        self.navigation_scroll.show()
+        self.preview_tabs.tabBar().show()
+        self.preview_label.setVisible(not photometry_active)
         if tab != 0:
             # Survey downloads and Science QA live in a separate inspector.
             # Hide it when entering pixel analysis, so 1366px displays keep
@@ -2001,7 +2185,7 @@ class SurveyExplorer(QMainWindow):
             self.preview_label.setText(
                 "Data Manager · offline observational provenance"
                 if self.preview_tabs.currentWidget() is self.dataset_manager
-                else ("Photometry · preparation only · no measurements"
+                else ("Photometry · PSF-0 diagnostic · no adopted measurements"
                       if self.preview_tabs.currentWidget() is self.photometry_workspace
                       else "Original FITS · read-only"))
         else:

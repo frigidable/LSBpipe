@@ -271,7 +271,7 @@ and reproducible, with previous runs remaining accessible.
 
 Do not claim completion from synthetic-only tests; require real-FITS
 acceptance and independent benchmarking before publication-grade status.
-For initial galaxy pilots use available UGC 2162 and a diverse control set
+For initial *photometry* pilots use Leo P first, followed by available UGC 2162 and a diverse control set
 (extended faint dwarf, compact dwarf, sky-crowded/star-contaminated field,
 brick boundary, known bright comparison galaxy). Leo P can stress-test
 resolved stars and irregular morphology but is not a universal Sérsic

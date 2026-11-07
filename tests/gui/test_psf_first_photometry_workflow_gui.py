@@ -29,6 +29,6 @@ def test_psf_first_science_workflow_has_correct_stage_order(qtbot):
     assert "04 · PSF reconstruction" == groups[3].title()
     assert "05 · Scene & smart masks" == groups[4].title()
     assert "07 · Refinement & QA" == groups[6].title()
-    assert "no PSF, sky or photometry has been measured" in w.subtitle.text()
+    assert "no adopted PSF, sky or galaxy photometry" in w.subtitle.text()
     assert w.table.rowCount() == 0
     assert w._project_root is None

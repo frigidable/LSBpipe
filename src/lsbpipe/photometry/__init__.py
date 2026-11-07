@@ -41,8 +41,20 @@ __all__ += [
 from .workflow_dependencies import (
     STAGE_ORDER, DEPENDENCIES, invalidated_descendants,
     require_stage_dependencies, PSFLineageKey,
+    inspect_empirical_psf_coverage, require_empirical_psf_coverage,
 )
 __all__ += [
     "STAGE_ORDER", "DEPENDENCIES", "invalidated_descendants",
     "require_stage_dependencies", "PSFLineageKey",
+    "inspect_empirical_psf_coverage", "require_empirical_psf_coverage",
+]
+
+# Experimental per-band native-coadd empirical PSF: holdout QA, never adopted.
+from .psf_empirical import (
+    PSF0Config, PSF0Star, PSF0Result, build_empirical_coadd_psf,
+)
+from .psf_export import export_psf0_diagnostic
+__all__ += [
+    "PSF0Config", "PSF0Star", "PSF0Result",
+    "build_empirical_coadd_psf", "export_psf0_diagnostic",
 ]
